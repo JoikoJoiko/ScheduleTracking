@@ -124,7 +124,7 @@ def validate_rows(rows, user):
     return payload, errors
 
 
-def preview_import(upload, profile, period, start, end, user):
+def preview_import(upload, profile, period, start, end, user, expected_course=None):
     if not upload.name.lower().endswith('.xlsx'):
         raise ValidationError('Поддерживаются только файлы .xlsx')
     data = upload.read(10*1024*1024+1)
@@ -141,6 +141,9 @@ def preview_import(upload, profile, period, start, end, user):
             rows,metadata,errors=parse_college(data,upload.name)
         except (zipfile.BadZipFile,KeyError,ValueError) as exc:
             raise ValidationError('Не удалось прочитать расписание') from exc
+        if expected_course is not None and {g['course'] for g in metadata['groups']} != {int(expected_course)}:
+            found=', '.join(str(n) for n in sorted({g['course'] for g in metadata['groups']}))
+            raise ValidationError(f'В файле указан курс {found}. Вы выбрали {expected_course} курс.')
         metadata['college']=True
         period=period or ensure_period(metadata)
         from datetime import date

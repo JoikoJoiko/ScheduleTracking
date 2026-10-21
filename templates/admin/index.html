@@ -1,3 +1,42 @@
-{% extends "admin/base_site.html" %}
-{% load i18n %}
-{% block content %}<div id="content-main"><p><a href="/admin/schedule/importbatch/upload/">Расписание XLSX</a> · <a href="/admin/schedule/imageimport/upload/">Замены из изображения</a> · <a href="/admin/schedule/timeslot/">Звонки</a> · <a href="/admin/conflicts/">Конфликты</a>{% if user.is_superuser %} · <a href="/admin/schedule/academicyear/rollover/">Новый учебный год</a>{% endif %}</p>{% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}</div>{% endblock %}
+{% extends "admin/base_site.html" %}{% load static %}
+{% block extrastyle %}{{ block.super }}<link rel="stylesheet" href="{% static 'admin-dashboard.css' %}">{% endblock %}
+{% block extrahead %}{{ block.super }}<script src="{% static 'admin-dashboard.js' %}" defer></script>{% endblock %}
+{% block coltype %}colM dashboard-page{% endblock %}
+{% block content_title %}{% endblock %}
+{% block sidebar %}{% endblock %}
+{% block content %}
+<div id="content-main" class="upload-dashboard" data-status-url="{% url 'admin:upload_status' %}">
+  <header class="dashboard-heading"><div><div class="dashboard-eyebrow">РАСПИСАНИЕ И ЗАМЕНЫ</div><h1>Обновление расписания</h1><p>{% if active_year %}{{ active_year.name }}{% else %}Загрузите первый файл расписания{% endif %}</p></div><a class="dashboard-secondary" href="/">Открыть сайт ↗</a></header>
+  <section class="dashboard-section" aria-labelledby="courses-heading">
+    <div class="dashboard-section-head"><h2 id="courses-heading">Расписание по курсам</h2>{% if user.is_superuser %}<label class="publish-switch"><input type="checkbox" id="auto-publish" checked> Обновлять после успешной проверки</label>{% endif %}</div>
+    {% if user.is_superuser %}
+    <div class="course-upload-grid">
+      {% for course in courses %}
+      <form class="course-upload-card live-upload" method="post" enctype="multipart/form-data" action="{% url 'admin:upload_schedule' %}" data-course="{{ course.number }}" data-kind="schedule">
+        {% csrf_token %}<input type="hidden" name="course" value="{{ course.number }}">
+        <div class="course-card-top"><span class="course-number">0{{ course.number }}</span><span class="course-status {% if course.groups %}loaded{% endif %}">{% if course.groups %}Загружен{% else %}Нет файла{% endif %}</span></div>
+        <h3>{{ course.number }} курс</h3><p class="course-meta">{% if course.groups %}Групп: {{ course.groups }}{% else %}Расписание ещё не загружено{% endif %}</p>
+        <label class="upload-dropzone" for="course-file-{{ course.number }}"><span class="upload-icon" aria-hidden="true">↑</span><span class="file-label">Выбрать XLSX</span><small>или перетащить файл</small><input type="file" name="file" id="course-file-{{ course.number }}" accept=".xlsx" required></label>
+        <button type="submit" class="dashboard-primary upload-submit">Загрузить и обновить <span>↗</span></button>
+        <div class="upload-feedback" role="status" aria-live="polite"><progress hidden max="100" aria-label="Обработка файла"></progress><p class="upload-message"></p><ul class="upload-errors" hidden></ul><a class="upload-result-link" hidden>Проверить результат →</a></div>
+        <small class="course-last-update">{% if course.published_at %}Обновлено {{ course.published_at|date:'d.m, H:i' }}{% else %}Другие курсы сохранятся{% endif %}</small>
+      </form>
+      {% endfor %}
+    </div>
+    {% else %}<p class="dashboard-muted">Файлы курсов загружает администратор.</p>{% endif %}
+  </section>
+  <section class="changes-upload-panel" aria-labelledby="changes-heading">
+    <div class="changes-upload-intro"><span class="dashboard-icon" aria-hidden="true">⇄</span><div class="dashboard-eyebrow">ОПЕРАТИВНЫЕ ИЗМЕНЕНИЯ</div><h2 id="changes-heading">Замены из изображения</h2><p>Таблица замен или жёлтые ячейки.</p><a href="{% url 'admin:schedule_imageimport_changelist' %}" class="pending-link">Ожидают проверки: <span id="pending-image-count">{{ pending_images }}</span> →</a></div>
+    <form class="changes-upload-form live-upload" method="post" enctype="multipart/form-data" action="{% url 'admin:upload_changes' %}" data-kind="changes">
+      {% csrf_token %}<div class="changes-upload-fields"><label>Дата замен<input type="date" name="target_date" value="{{ upload_today }}" required></label><fieldset class="image-layout-options"><legend>Формат</legend><label><input type="radio" name="layout" value="table" checked><span>Таблица</span></label><label><input type="radio" name="layout" value="yellow"><span><i aria-hidden="true"></i> Жёлтые ячейки</span></label></fieldset></div>
+      <label class="upload-dropzone image-dropzone" for="changes-file"><span class="upload-icon" aria-hidden="true">▧</span><span class="file-label">Выбрать изображение</span><small>PNG, JPG, WebP · до 10 МБ</small><input type="file" name="image" id="changes-file" accept="image/png,image/jpeg,image/webp" required></label>
+      <button type="submit" class="dashboard-primary upload-submit">Распознать замены <span>↗</span></button>
+      <div class="upload-feedback" role="status" aria-live="polite"><progress hidden max="100" aria-label="Обработка изображения"></progress><p class="upload-message"></p><ul class="upload-errors" hidden></ul><a class="upload-result-link" hidden>Проверить и опубликовать →</a></div>
+    </form>
+  </section>
+  <section class="dashboard-section" aria-labelledby="history-heading"><div class="dashboard-section-head"><h2 id="history-heading">Последние загрузки</h2><a href="{% url 'admin:schedule_importbatch_changelist' %}">Вся история ↗</a></div><div class="upload-history-table"><table><thead><tr><th>Файл</th><th>Дата</th><th>Статус</th><th></th></tr></thead><tbody id="upload-history">
+    {% for record in upload_history %}<tr><td><span class="history-icon" aria-hidden="true">{% if record.kind == 'schedule' %}▦{% else %}⇄{% endif %}</span>{{ record.name }}</td><td>{{ record.date|date:'d.m H:i' }}</td><td><span class="history-state state-{{ record.state }}">{{ record.label }}</span></td><td><a href="{{ record.url }}">Открыть ↗</a></td></tr>{% empty %}<tr><td colspan="4" class="dashboard-muted">Загрузок пока нет</td></tr>{% endfor %}
+  </tbody></table></div></section>
+  <div class="dashboard-quick-links"><a href="{% url 'admin:schedule_timeslot_changelist' %}">◷ Звонки</a><a href="/admin/conflicts/">◇ Конфликты</a>{% if user.is_superuser %}<a href="{% url 'admin:schedule_year_rollover' %}">▦ Учебные годы</a>{% endif %}<a href="{% url 'admin:schedule_change_changelist' %}">⇄ Все замены</a></div>
+  <details class="dashboard-directories"><summary>Справочники и настройки</summary>{% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}</details>
+</div>{% endblock %}

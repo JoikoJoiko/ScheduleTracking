@@ -12,6 +12,7 @@ from .college_import import parse_college,install_bells
 from .importing import preview_import,confirm_import,import_report
 from .image_import import decode_cell,suggestion,upload_image,publish_review,yellow_fraction
 from . import services as svc
+from .test_support import college_workbook
 
 
 @override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'])
@@ -20,15 +21,7 @@ class CollegeImportTests(TestCase):
         self.user=get_user_model().objects.create_superuser(username='reviewer',password='test-password')
         self.profile=ImportProfile.objects.get(kind='college')
     def workbook(self,group='ТЕСТ-1-23',teacher='Тестов А.А.',room='103п3'):
-        book=Workbook();s=book.active;s.title='Расписание'
-        s['A1']='Расписание занятий';s['A2']='с 20.10.2026 по 31.12.2026'
-        s['F6']=group;s.merge_cells('F6:I6');s['F7']=1;s['H7']=2
-        for r in [9,23]:
-            s.cell(r,1,'ПОНЕДЕЛЬНИК');s.cell(r,2,1)
-            s.cell(r,6,'Программирование');s.merge_cells(start_row=r,start_column=6,end_row=r,end_column=8)
-            s.cell(r,9,room);s.cell(r+1,6,teacher);s.merge_cells(start_row=r+1,start_column=6,end_row=r+1,end_column=9)
-        book.create_sheet('Пустой лист')
-        output=io.BytesIO();book.save(output);return output.getvalue()
+        return college_workbook(group,teacher,room)
     def batch(self,**kwargs):
         return preview_import(SimpleUploadedFile('course.xlsx',self.workbook(**kwargs)),self.profile,None,None,None,self.user)
     def test_actual_layout_two_rows_two_weeks(self):
