@@ -135,6 +135,8 @@ class ChangeAdmin(ScopedAdmin):
         services.require_buildings(request.user,services.change_buildings(obj))
         if obj.group_id:
             services.require_buildings(request.user,[obj.group.building_id])
+        if obj.target_group_id:
+            services.require_buildings(request.user,[obj.target_group.building_id])
         if not change:
             obj.created_by=request.user
         super().save_model(request,obj,form,change)
@@ -162,10 +164,10 @@ class BlockAdmin(ScopedAdmin):
 
 class UploadForm(forms.Form):
     file = forms.FileField(label='Файл XLSX')
-    profile = forms.ModelChoiceField(ImportProfile.objects.all(),label='Профиль')
-    period = forms.ModelChoiceField(Period.objects.all(),label='Учебный период')
-    start = forms.DateField(label='Действует с',widget=forms.DateInput(attrs={'type':'date'}))
-    end = forms.DateField(label='Действует по',widget=forms.DateInput(attrs={'type':'date'}))
+    profile = forms.ModelChoiceField(ImportProfile.objects.all(),label='Формат')
+    period = forms.ModelChoiceField(Period.objects.all(),label='Период',required=False)
+    start = forms.DateField(label='С',required=False,widget=forms.DateInput(attrs={'type':'date'}))
+    end = forms.DateField(label='По',required=False,widget=forms.DateInput(attrs={'type':'date'}))
 
 
 @admin.register(ImportBatch)
@@ -212,7 +214,7 @@ class ImportAdmin(SafeAdmin):
         current=services.version_on(batch.effective_from)
         report=import_report(batch)
         return render(request,'admin/import_preview.html',dict(self.admin_site.each_context(request),batch=batch,
-            report=report,group_count=len({r['group_id'] for r in batch.payload}),current=current,title='Предварительный просмотр импорта'))
+            report=report,group_count=len({r.get('group_id',r.get('group')) for r in batch.payload}),current=current,title='Предварительный просмотр импорта'))
 
 
 @admin.register(AcademicYear)
@@ -256,5 +258,116 @@ class AuditAdmin(SafeAdmin):
         return False
 
 
-for model in [Period, Building, RoomType, Room, Teacher, Specialty, StudentGroup, GroupYear, Subgroup, Subject, TimeSlot, CalendarDay, StaffScope, ImportProfile, SystemSetting]:
+for model in [Period, Building, RoomType, Teacher, Specialty, StudentGroup, GroupYear, Subgroup, Subject, CalendarDay, StaffScope, ImportProfile, SystemSetting]:
     admin.site.register(model,SafeAdmin)
+
+
+@admin.register(TimeSlot)
+class BellsAdmin(SafeAdmin):
+    list_display=['name','start_time','end_time','sort_order']
+    list_editable=['start_time','end_time']
+
+
+@admin.register(Room)
+class RoomsAdmin(SafeAdmin):
+    list_display=['number','is_active']
+    search_fields=['number']
+    fields=['number','description','is_active']
+    def save_model(self,request,obj,form,change):
+        if not obj.building_id:
+            obj.building=Building.objects.get_or_create(name='Колледж')[0]
+        if not obj.room_type_id:
+            obj.room_type=RoomType.objects.get_or_create(name='Кабинет')[0]
+        super().save_model(request,obj,form,change)
+
+
+class ImageUploadForm(forms.Form):
+    image=forms.ImageField(label='Изображение')
+    target_date=forms.DateField(label='Дата замен',widget=forms.DateInput(attrs={'type':'date'}))
+    layout=forms.ChoiceField(label='Формат',choices=[('table','Таблица замен'),('yellow','Жёлтые ячейки')])
+
+
+class ImageRowForm(forms.Form):
+    use=forms.BooleanField(label='Проверено',required=False)
+    group=forms.ModelChoiceField(StudentGroup.objects.all(),required=False,label='Группа')
+    subgroup=forms.ModelChoiceField(Subgroup.objects.select_related('group'),required=False,label='Подгруппа')
+    slot=forms.IntegerField(min_value=1,max_value=7,required=False,label='Пара')
+    kind=forms.ChoiceField(choices=[('replace','Замена'),('cancel','Отмена')],label='Действие')
+    subject=forms.ModelChoiceField(Subject.objects.all(),required=False,label='Дисциплина')
+    teacher=forms.ModelChoiceField(Teacher.objects.all(),required=False,label='Преподаватель')
+    room=forms.ModelChoiceField(Room.objects.all(),required=False,label='Кабинет')
+    def clean(self):
+        data=super().clean()
+        if data.get('use'):
+            for name in ['group','slot']+([] if data.get('kind')=='cancel' else ['subject','teacher','room']):
+                if not data.get(name):
+                    self.add_error(name,'Выберите значение')
+            if data.get('subgroup') and data.get('group') and data['subgroup'].group_id!=data['group'].pk:
+                self.add_error('subgroup','Не относится к группе')
+        return data
+
+
+@admin.register(ImageImport)
+class ImageAdmin(SafeAdmin):
+    list_display=['target_date','layout','status','uploaded_by','created_at']
+    change_list_template='admin/image_list.html'
+    readonly_fields=[f.name for f in ImageImport._meta.fields]
+    def has_module_permission(self,request):
+        return request.user.is_staff
+    def has_view_permission(self,request,obj=None):
+        return request.user.is_staff
+    def has_add_permission(self,request):
+        return False
+    def get_queryset(self,request):
+        qs=super().get_queryset(request)
+        return qs if request.user.is_superuser else qs.filter(uploaded_by=request.user)
+    def get_urls(self):
+        return [path('upload/',self.admin_site.admin_view(self.upload),name='schedule_image_upload'),
+            path('<int:pk>/review/',self.admin_site.admin_view(self.review),name='schedule_image_review'),
+            path('<int:pk>/source/',self.admin_site.admin_view(self.source),name='schedule_image_source')]+super().get_urls()
+    def upload(self,request):
+        from .image_import import upload_image
+        form=ImageUploadForm(request.POST or None,request.FILES or None)
+        if request.method=='POST' and form.is_valid():
+            try:
+                batch=upload_image(form.cleaned_data['image'],form.cleaned_data['target_date'],form.cleaned_data['layout'],request.user)
+                return redirect('admin:schedule_image_review',pk=batch.pk)
+            except ValidationError as exc:
+                form.add_error(None,exc)
+        return render(request,'admin/upload.html',dict(self.admin_site.each_context(request),form=form,title='Загрузить замены'))
+    def source(self,request,pk):
+        from django.shortcuts import get_object_or_404
+        from django.http import FileResponse
+        batch=get_object_or_404(self.get_queryset(request),pk=pk)
+        return FileResponse(batch.image.open('rb'),content_type='image/png')
+    def review(self,request,pk):
+        from django.shortcuts import get_object_or_404
+        from django.forms import formset_factory
+        from .image_import import publish_review
+        batch=get_object_or_404(self.get_queryset(request),pk=pk)
+        initial=[{'group':r.get('group_id'),'subgroup':r.get('subgroup_id'),'slot':r.get('slot'),'kind':r.get('kind','replace'),
+            'subject':r.get('subject_id'),'teacher':r.get('teacher_id'),'room':r.get('room_id')} for r in batch.payload]
+        FormSet=formset_factory(ImageRowForm,extra=3,max_num=250,validate_max=True)
+        formset=FormSet(request.POST or None,initial=initial)
+        if request.method=='POST' and batch.status=='review':
+            if request.POST.get('cancel'):
+                batch.status='cancelled';batch.save();services.audit(request.user,'cancel_image',batch)
+                return redirect('admin:schedule_imageimport_changelist')
+            if formset.is_valid():
+                rows=[]
+                for form in formset:
+                    d=form.cleaned_data
+                    if not d or not d.get('use'):
+                        continue
+                    rows.append({'group_id':d['group'].pk,'slot':d['slot'],'kind':d['kind'],
+                        'subgroup_id':d['subgroup'].pk if d.get('subgroup') else None,
+                        **{key+'_id':d[key].pk if d.get(key) else None for key in ['subject','teacher','room']}})
+                try:
+                    publish_review(batch,rows,request.user)
+                    self.message_user(request,'Замены опубликованы',messages.SUCCESS)
+                    return redirect('admin:schedule_imageimport_changelist')
+                except (ValidationError,PermissionDenied) as exc:
+                    self.message_user(request,str(exc),messages.ERROR)
+        previews=[r.get('group_text','')+' · '+r.get('raw','') for r in batch.payload]
+        items=[(form,previews[i] if i<len(previews) else '') for i,form in enumerate(formset)]
+        return render(request,'admin/image_review.html',dict(self.admin_site.each_context(request),title='Проверка замен',batch=batch,formset=formset,items=items))

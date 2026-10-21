@@ -1,3 +1,3 @@
 {% extends "admin/base_site.html" %}
-{% block content %}<p>Загрузка не меняет опубликованное расписание. Сначала проверьте результат распознавания.</p>
+{% block content %}{% if title == 'Импорт расписания' %}<p>Период и даты — из файла.</p>{% endif %}
 <form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_p }}<input type="submit" value="Распознать и проверить"></form>{% endblock %}

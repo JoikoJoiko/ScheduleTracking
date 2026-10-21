@@ -16,6 +16,8 @@ from .importing import HEADERS,FIELDS,preview_import,confirm_import,parse_xlsx,i
 class ScheduleTests(TestCase):
     def setUp(self):
         cache.clear()
+        TimeSlot.objects.all().delete()
+        ImportProfile.objects.all().delete()
         self.admin=get_user_model().objects.create_superuser(username='admin',password='local-test-password')
         self.dispatcher=get_user_model().objects.create_user(username='dispatcher',password='local-test-password',is_staff=True)
         self.year=AcademicYear.objects.create(name='2026/2027',start_date=date(2026,9,1),end_date=date(2027,8,31),status='active')

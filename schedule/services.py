@@ -29,9 +29,12 @@ def require_buildings(user, ids):
 
 
 def lesson_dict(lesson, date):
+    start=lesson.start_time or lesson.time_slot.start_time
+    end=lesson.end_time or lesson.time_slot.end_time
     return {'id': lesson.pk, 'date': date.isoformat(), 'slot': lesson.time_slot.sort_order,
-        'start': (lesson.start_time or lesson.time_slot.start_time).isoformat(timespec='minutes'),
-        'end': (lesson.end_time or lesson.time_slot.end_time).isoformat(timespec='minutes'),
+        'start': start.isoformat(timespec='minutes') if start else None,
+        'end': end.isoformat(timespec='minutes') if end else None,
+        'time_label':lesson.time_slot.name,
         'subject_id': lesson.subject_id, 'subject': lesson.subject.name, 'teacher_id': lesson.teacher_id,
         'teacher': lesson.teacher.name, 'room_id': lesson.room_id, 'room': lesson.room.number,
         'building_id': lesson.room.building_id, 'building': lesson.room.building.name,
@@ -46,7 +49,19 @@ def version_on(date):
 
 
 def base_schedule(date, version=None):
-    version = version or version_on(date)
+    if version is None:
+        result=[];claimed=set()
+        versions=ScheduleVersion.objects.filter(status='published',effective_from__lte=date,effective_to__gte=date).order_by('-published_at','-pk').prefetch_related('groups')
+        for item in versions:
+            scope={g.pk for g in item.groups.all()}
+            for lesson in base_schedule(date,item):
+                lesson['groups']=[g for g in lesson['groups'] if g['id'] not in claimed and (not scope or g['id'] in scope)]
+                if lesson['groups']:
+                    result.append(lesson)
+            if not scope:
+                break
+            claimed.update(scope)
+        return result
     if not version or not version.effective_from <= date <= version.effective_to:
         return []
     calendar = CalendarDay.objects.filter(date=date, year=version.period.year).first()
@@ -80,7 +95,8 @@ def apply_change(change, base):
                 result.update(building_id=obj.building_id, building=obj.building.name)
     if change.time_slot:
         result.update(slot=change.time_slot.sort_order,
-            start=change.time_slot.start_time.isoformat(timespec='minutes'), end=change.time_slot.end_time.isoformat(timespec='minutes'))
+            start=change.time_slot.start_time.isoformat(timespec='minutes') if change.time_slot.start_time else None,
+            end=change.time_slot.end_time.isoformat(timespec='minutes') if change.time_slot.end_time else None)
     if change.start_time:
         result.update(start=change.start_time.isoformat(timespec='minutes'), end=change.end_time.isoformat(timespec='minutes'))
     if change.group:
@@ -93,7 +109,17 @@ def apply_change(change, base):
 
 
 def schedule_on(date, preview=None, version=None, omit_change=None):
-    lessons = base_schedule(date, version)
+    def prospective(day):
+        rows=base_schedule(day,version)
+        if version:
+            scope=set(version.groups.values_list('pk',flat=True))
+            if scope:
+                for existing in base_schedule(day):
+                    existing['groups']=[g for g in existing['groups'] if g['id'] not in scope]
+                    if existing['groups']:
+                        rows.append(existing)
+        return rows
+    lessons = prospective(date)
     changes = list(Change.objects.filter(status='published').select_related('original__version__period__year',
         'original__subject', 'original__teacher', 'original__room__building', 'original__time_slot',
         'subject', 'teacher', 'room__building', 'time_slot', 'group', 'subgroup').prefetch_related(
@@ -105,20 +131,30 @@ def schedule_on(date, preview=None, version=None, omit_change=None):
     # Latest published revision wins, including when a move changes destination twice.
     latest = {}
     for change in changes:
-        latest[(change.original_id, change.target_date) if change.original_id else ('add', change.pk)] = change
-    for change in latest.values():
+        latest[(change.original_id, change.target_date,change.target_group_id) if change.original_id else ('add', change.pk)] = change
+    for change in sorted(latest.values(),key=lambda x:(x==preview,x.published_at or timezone.now(),x.pk or 0)):
         if change.target_date != date and change.new_date != date:
             continue
         base = next((x for x in lessons if x['id'] == change.original_id), None) if change.original_id else None
         if change.original_id:
-            source_version = version or version_on(change.target_date)
-            if not source_version or source_version.pk != change.original.version_id:
-                continue
-            source = base_schedule(change.target_date, source_version)
+            source = prospective(change.target_date)
             base = next((x for x in source if x['id'] == change.original_id), None)
             if not base:
                 continue
-            lessons = [x for x in lessons if x['id'] != change.original_id or x['date'] != change.target_date.isoformat()]
+            if change.target_group_id:
+                base=deepcopy(base)
+                base['groups']=[g for g in base['groups'] if g['id']==change.target_group_id]
+                if not base['groups']:
+                    continue
+                kept=[]
+                for item in lessons:
+                    if item['id']==change.original_id and item['date']==change.target_date.isoformat():
+                        item['groups']=[g for g in item['groups'] if g['id']!=change.target_group_id]
+                        if item['groups']:kept.append(item)
+                    else:kept.append(item)
+                lessons=kept
+            else:
+                lessons = [x for x in lessons if x['id'] != change.original_id or x['date'] != change.target_date.isoformat()]
         changed = apply_change(change, base)
         if change.kind == 'move' and change.target_date == date and changed['date'] != date.isoformat():
             marker = deepcopy(base)
@@ -126,7 +162,7 @@ def schedule_on(date, preview=None, version=None, omit_change=None):
             lessons.append(marker)
         if changed['date'] == date.isoformat():
             lessons.append(changed)
-    return sorted(lessons, key=lambda x: (x['start'], x['slot'], x.get('id') or 0))
+    return sorted(lessons, key=lambda x: (x['start'] or '', x['slot'], x.get('id') or 0))
 
 
 def live(lesson):
@@ -138,7 +174,7 @@ def overlaps(start, end, other_start, other_end):
 
 
 def conflicts_for(date, lessons):
-    active = [x for x in lessons if live(x)]
+    active = [x for x in lessons if live(x) and x['start'] and x['end']]
     conflicts = []
     def add(kind, a, b=None):
         conflicts.append({'type': kind, 'date': date.isoformat(), 'lesson': a, 'other': b})
@@ -228,6 +264,8 @@ def publish_change(change, user):
     require_buildings(user, change_buildings(change))
     if change.group_id:
         require_buildings(user, [change.group.building_id])
+    if change.target_group_id:
+        require_buildings(user,[change.target_group.building_id])
     if change.original_id and not any(x['id'] == change.original_id for x in base_schedule(change.target_date)):
         raise ValidationError('Исходного занятия нет в актуальном расписании на эту дату')
     dates = {change.target_date, change.new_date or change.target_date}
@@ -277,7 +315,7 @@ def rollback_version(version, user):
 
 
 def availability(date, start, end, rooms=None):
-    lessons = [x for x in schedule_on(date) if live(x)]
+    lessons = [x for x in schedule_on(date) if live(x) and x['start'] and x['end']]
     day_start = timezone.make_aware(datetime.combine(date, time.min))
     blocks = list(RoomBlock.objects.filter(start_at__lt=day_start+timedelta(days=1), end_at__gt=day_start))
     begin = timezone.make_aware(datetime.combine(date, start))
@@ -297,11 +335,11 @@ def availability(date, start, end, rooms=None):
 
 
 def free_intervals(lessons, date, room_id=None):
-    slots = list(TimeSlot.objects.all())
+    slots = list(TimeSlot.objects.filter(start_time__isnull=False,end_time__isnull=False))
     if not slots:
         return []
     start, finish = min(x.start_time for x in slots), max(x.end_time for x in slots)
-    occupied = [(time.fromisoformat(x['start']), time.fromisoformat(x['end'])) for x in lessons if live(x)]
+    occupied = [(time.fromisoformat(x['start']), time.fromisoformat(x['end'])) for x in lessons if live(x) and x['start'] and x['end']]
     if room_id:
         a = timezone.make_aware(datetime.combine(date, start))
         b = timezone.make_aware(datetime.combine(date, finish))
@@ -321,7 +359,7 @@ def free_intervals(lessons, date, room_id=None):
 def rollover_preview(source, target):
     rows = []
     for membership in GroupYear.objects.filter(year=source).select_related('group'):
-        graduated = membership.status == 'active' and membership.group.graduation_year <= target.start_date.year
+        graduated = membership.status == 'active' and (membership.group.graduation_year <= target.start_date.year or membership.course>=4)
         rows.append({'group_id':membership.group_id, 'name':membership.group.name,
             'course':membership.course+1 if membership.status == 'active' and not graduated else membership.course,
             'status':'graduated' if graduated else membership.status})

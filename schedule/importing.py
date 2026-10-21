@@ -127,9 +127,32 @@ def validate_rows(rows, user):
 def preview_import(upload, profile, period, start, end, user):
     if not upload.name.lower().endswith('.xlsx'):
         raise ValidationError('Поддерживаются только файлы .xlsx')
-    if not period.start_date <= start <= end <= period.end_date:
-        raise ValidationError('Даты вне учебного периода')
     data = upload.read(10*1024*1024+1)
+    if profile.kind=='college':
+        if not user.is_superuser:
+            raise ValidationError('Импорт с созданием справочников доступен администратору')
+        from .college_import import parse_college,ensure_period
+        if len(data)>10*1024*1024:
+            raise ValidationError('Файл больше 10 МБ')
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                if sum(x.file_size for x in archive.infolist())>50*1024*1024:
+                    raise ValidationError('Слишком большой распакованный файл')
+            rows,metadata,errors=parse_college(data,upload.name)
+        except (zipfile.BadZipFile,KeyError,ValueError) as exc:
+            raise ValidationError('Не удалось прочитать расписание') from exc
+        metadata['college']=True
+        period=period or ensure_period(metadata)
+        from datetime import date
+        start=start or date.fromisoformat(metadata['start']);end=end or date.fromisoformat(metadata['end'])
+        if not period.start_date<=start<=end<=period.end_date:
+            raise ValidationError('Даты вне учебного периода')
+        batch=ImportBatch.objects.create(filename=upload.name,file_hash=hashlib.sha256(data).hexdigest(),profile=profile,
+            period=period,effective_from=start,effective_to=end,payload=rows,metadata=metadata,errors=errors,uploaded_by=user)
+        audit(user,'preview_import',batch,new={'rows':len(rows),'errors':len(errors)})
+        return batch
+    if not period or not start or not end or not period.start_date <= start <= end <= period.end_date:
+        raise ValidationError('Укажите период и даты действия')
     rows, errors = parse_xlsx(data, profile)
     payload, row_errors = validate_rows(rows, user)
     batch = ImportBatch.objects.create(filename=upload.name, file_hash=hashlib.sha256(data).hexdigest(), profile=profile,
@@ -146,14 +169,22 @@ def confirm_import(batch, user):
         return batch.version
     if batch.status != 'preview' or batch.errors:
         raise ValidationError('Импорт отменён или содержит ошибки')
-    require_buildings(user, Room.objects.filter(pk__in=[x['room_id'] for x in batch.payload]).values_list('building_id',flat=True))
+    if not batch.metadata.get('college'):
+        require_buildings(user, Room.objects.filter(pk__in=[x['room_id'] for x in batch.payload]).values_list('building_id',flat=True))
     prior = ImportBatch.objects.filter(file_hash=batch.file_hash, period=batch.period,
         effective_from=batch.effective_from,effective_to=batch.effective_to,status='confirmed',version__status='published').first()
     if prior:
         raise ValidationError(f'Этот файл уже опубликован (импорт №{prior.pk})')
     version = ScheduleVersion.objects.create(name=f'Импорт {batch.filename}',period=batch.period,
         effective_from=batch.effective_from,effective_to=batch.effective_to)
-    populate_version(version,batch.payload)
+    payload=batch.payload
+    if batch.metadata.get('college'):
+        from .college_import import materialize
+        if not user.is_superuser:
+            raise ValidationError('Нужны права администратора')
+        payload=materialize(payload,batch.metadata,batch.period)
+        version.groups.set({r['group_id'] for r in payload})
+    populate_version(version,payload)
     publish_version(version,user)
     batch.version = version
     batch.status = 'confirmed'
@@ -181,6 +212,24 @@ def populate_version(version,payload):
 
 def import_report(batch):
     """Use a rollback-only transaction so previews share real publication rules."""
+    if batch.metadata.get('college'):
+        report={'rows':batch.payload,'conflicts':[],'new_count':len(batch.payload),
+            'previous_count':Lesson.objects.filter(version__status='published',participants__group__name__in=[x['name'] for x in batch.metadata['groups']]).distinct().count(),
+            'groups':[x['name'] for x in batch.metadata['groups']]}
+        if batch.errors or batch.status!='preview':
+            return report
+        from .college_import import materialize
+        with transaction.atomic():
+            payload=materialize(batch.payload,batch.metadata,batch.period)
+            version=ScheduleVersion.objects.create(name='Предпросмотр',period=batch.period,effective_from=batch.effective_from,effective_to=batch.effective_to)
+            version.groups.set({r['group_id'] for r in payload})
+            populate_version(version,payload)
+            for day in candidate_dates(version):
+                report['conflicts'].extend(conflicts_for(day,schedule_on(day,version=version)))
+                if len(report['conflicts'])>=100:
+                    break
+            transaction.set_rollback(True)
+        return report
     names={model.__name__:{x.pk:str(x) for x in model.objects.all()} for model in [StudentGroup,Subject,Teacher,Room,Subgroup]}
     rows=[]
     for row in batch.payload:

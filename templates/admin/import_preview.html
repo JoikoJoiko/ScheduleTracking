@@ -1,9 +1,8 @@
 {% extends "admin/base_site.html" %}
 {% block content %}<p><strong>{{ batch.filename }}</strong> · {{ batch.payload|length }} строк · {{ group_count }} групп · статус: {{ batch.status }}</p>
-<p>Новая полная версия на {{ batch.effective_from }} — {{ batch.effective_to }}. Текущая версия: {{ current|default:'нет' }}.</p>
-<p>Справочники автоматически не создаются: неизвестные значения требуют ручной проверки. При публикации будет выполнена проверка всех дат периода; ошибка отменит операцию целиком.</p>
+<p>{{ batch.effective_from }} — {{ batch.effective_to }}{% if batch.metadata.college %} · Только группы из файла{% endif %}</p>
 {% for error in batch.errors %}<p class="errornote">{{ error }}</p>{% endfor %}
-<p>Занятий в прежней версии: {{ report.previous_count }}. Строк в новой: {{ report.new_count }}. Групп: {{ group_count }}. Новых справочников: 0.</p>
+<p>Было: {{ report.previous_count }} · Загружено: {{ report.new_count }} · Групп: {{ group_count }}</p>
 {% for conflict in report.conflicts %}<p class="errornote">{{ conflict.date }} · {{ conflict.type }} · {{ conflict.lesson.subject }} · {{ conflict.lesson.room }}</p>{% endfor %}
 <table><thead><tr><th>День (0–6)</th><th>Группа</th><th>Подгруппа</th><th>Дисциплина</th><th>Преподаватель</th><th>Аудитория</th><th>Неделя</th></tr></thead><tbody>{% for row in report.rows %}<tr><td>{{ row.day_of_week }}</td><td>{{ row.group }}</td><td>{{ row.subgroup }}</td><td>{{ row.subject }}</td><td>{{ row.teacher }}</td><td>{{ row.room }}</td><td>{{ row.week_type }}</td></tr>{% endfor %}</tbody></table>
 <form method="post">{% csrf_token %}{% if not batch.errors and not report.conflicts and batch.status == 'preview' %}<input type="submit" value="Подтвердить и опубликовать">{% endif %}

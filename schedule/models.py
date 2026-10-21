@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 
 class Named(models.Model):
@@ -87,7 +88,7 @@ class Specialty(Named):
 GROUP_STATUS = [('active', 'Активная'), ('graduated', 'Выпущена'), ('archived', 'Архивная'), ('disbanded', 'Расформирована')]
 class StudentGroup(Named):
     name = models.CharField('Название', max_length=100, unique=True)
-    specialty = models.ForeignKey(Specialty, on_delete=models.PROTECT, verbose_name='Специальность')
+    specialty = models.ForeignKey(Specialty, on_delete=models.PROTECT, null=True, blank=True, verbose_name='Специальность')
     building = models.ForeignKey(Building, on_delete=models.PROTECT, verbose_name='Корпус')
     admission_year = models.PositiveIntegerField('Год поступления')
     graduation_year = models.PositiveIntegerField('Год выпуска')
@@ -100,7 +101,7 @@ class StudentGroup(Named):
 class GroupYear(models.Model):
     group = models.ForeignKey(StudentGroup, on_delete=models.PROTECT, verbose_name='Группа')
     year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, verbose_name='Учебный год')
-    course = models.PositiveSmallIntegerField('Курс', default=1)
+    course = models.PositiveSmallIntegerField('Курс', default=1, validators=[MinValueValidator(1), MaxValueValidator(4)])
     status = models.CharField('Статус', max_length=15, choices=GROUP_STATUS, default='active')
     def __str__(self):
         return f'{self.group} · {self.year} · {self.course} курс'
@@ -128,12 +129,14 @@ class Subject(Named):
 
 
 class TimeSlot(Named):
-    start_time = models.TimeField('Начало')
-    end_time = models.TimeField('Окончание')
+    start_time = models.TimeField('Начало', null=True, blank=True)
+    end_time = models.TimeField('Окончание', null=True, blank=True)
     sort_order = models.PositiveSmallIntegerField('Номер пары', unique=True)
     def clean(self):
-        if self.start_time >= self.end_time:
+        if bool(self.start_time) != bool(self.end_time) or (self.start_time and self.start_time >= self.end_time):
             raise ValidationError('Окончание пары должно быть позже начала')
+        if self.sort_order and not self.start_time:
+            raise ValidationError('Для пары укажите начало и окончание')
     class Meta:
         ordering = ['sort_order']
         verbose_name = 'Пара'
@@ -147,6 +150,7 @@ class ScheduleVersion(Named):
     status = models.CharField('Статус', max_length=15, choices=[('draft', 'Черновик'), ('published', 'Опубликовано'), ('archived', 'Архив')], default='draft')
     created_at = models.DateTimeField(auto_now_add=True)
     published_at = models.DateTimeField(null=True, blank=True)
+    groups = models.ManyToManyField(StudentGroup, blank=True, verbose_name='Группы этой версии')
     def clean(self):
         if not (self.period.start_date <= self.effective_from <= self.effective_to <= self.period.end_date):
             raise ValidationError('Срок действия должен находиться внутри периода')
@@ -221,6 +225,7 @@ class Change(models.Model):
     teacher = models.ForeignKey(Teacher, on_delete=models.PROTECT, null=True, blank=True, verbose_name='Новый преподаватель')
     room = models.ForeignKey(Room, on_delete=models.PROTECT, null=True, blank=True, verbose_name='Новая аудитория')
     group = models.ForeignKey(StudentGroup, on_delete=models.PROTECT, null=True, blank=True, verbose_name='Новая группа')
+    target_group = models.ForeignKey(StudentGroup, on_delete=models.PROTECT, null=True, blank=True, related_name='targeted_changes', verbose_name='Только для группы')
     subgroup = models.ForeignKey(Subgroup, on_delete=models.PROTECT, null=True, blank=True, verbose_name='Новая подгруппа')
     whole_group = models.BooleanField('Снять деление на подгруппы', default=False)
     reason = models.TextField('Причина', blank=True)
@@ -231,6 +236,8 @@ class Change(models.Model):
     def clean(self):
         if self.kind != 'add' and not self.original_id:
             raise ValidationError('Выберите исходное занятие')
+        if self.target_group_id and (not self.original_id or not self.original.participants.filter(group_id=self.target_group_id).exists()):
+            raise ValidationError('Выбранная группа не участвует в исходном занятии')
         if self.kind == 'add' and (self.original_id or not all([self.time_slot_id, self.subject_id, self.teacher_id, self.room_id, self.group_id])):
             raise ValidationError('Для дополнительного занятия нужны пара, дисциплина, преподаватель, аудитория и группа; исходное занятие не указывается')
         if self.kind == 'move' and not self.new_date:
@@ -274,7 +281,7 @@ class StaffScope(models.Model):
 
 
 class ImportProfile(Named):
-    kind = models.CharField('Формат', max_length=16, choices=[('rows', 'Строки с заголовками'), ('blocks', 'Блоки групп')], default='rows')
+    kind = models.CharField('Формат', max_length=16, choices=[('college', 'Расписание колледжа'), ('rows', 'Строки с заголовками'), ('blocks', 'Блоки групп')], default='rows')
     mapping = models.JSONField('Сопоставление столбцов / конфигурация блоков', default=dict, blank=True)
     class Meta(Named.Meta):
         verbose_name = 'Профиль импорта'
@@ -291,6 +298,7 @@ class ImportBatch(models.Model):
     effective_to = models.DateField()
     payload = models.JSONField(default=list)
     errors = models.JSONField(default=list)
+    metadata = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=16, default='preview')
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -325,3 +333,19 @@ class SystemSetting(models.Model):
     class Meta:
         verbose_name = 'Настройка'
         verbose_name_plural = 'Настройки'
+
+
+class ImageImport(models.Model):
+    image = models.ImageField('Изображение', upload_to='changes/%Y/%m/')
+    target_date = models.DateField('Дата замен')
+    layout = models.CharField('Формат', max_length=12, choices=[('table','Таблица замен'),('yellow','Жёлтые ячейки')])
+    payload = models.JSONField('Распознанные строки', default=list, blank=True)
+    warnings = models.JSONField('Предупреждения', default=list, blank=True)
+    status = models.CharField('Статус', max_length=12, default='review', choices=[('review','Проверка'),('published','Опубликовано'),('cancelled','Отменено')])
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, verbose_name='Автор')
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        verbose_name = 'Загрузка замен'
+        verbose_name_plural = 'Замены из изображений'
+    def __str__(self):
+        return f'{self.target_date} · {self.get_layout_display()}'

@@ -22,5 +22,6 @@ urlpatterns = [
     path('api/<str:kind>',v.catalog),
     re_path(r'^(?:groups|teachers|rooms)(?:/\d+)?/?$',v.page),
     path('changes',v.page),
+    path('bells',v.page),
     path('',v.page),
 ]

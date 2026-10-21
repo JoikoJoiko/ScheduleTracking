@@ -77,7 +77,7 @@ def meta(request):
         'buildings':list(Building.objects.values('id','name')),
         'room_types':list(RoomType.objects.values('id','name')),
         'specialties':list(Specialty.objects.values('id','name','code')),
-        'slots':[{'id':x.pk,'number':x.sort_order,'name':x.name,'start':x.start_time.isoformat(timespec='minutes'),'end':x.end_time.isoformat(timespec='minutes')} for x in TimeSlot.objects.all()],
+        'slots':[{'id':x.pk,'number':x.sort_order,'name':x.name,'start':x.start_time.isoformat(timespec='minutes') if x.start_time else None,'end':x.end_time.isoformat(timespec='minutes') if x.end_time else None} for x in TimeSlot.objects.filter(start_time__isnull=False)],
         'years':list(AcademicYear.objects.values('id','name','status')),
         'staff':request.user.is_active and request.user.is_staff})
 
@@ -104,7 +104,7 @@ def catalog(request,kind):
             if request.GET.get('building') and x.building_id!=int(request.GET['building']):
                 continue
             if matches(x.name,query):
-                rows.append({'id':x.pk,'name':x.name,'specialty':x.specialty.name,'building':x.building.name,'status':status,'course':membership.course if membership else None})
+                rows.append({'id':x.pk,'name':x.name,'specialty':x.specialty.name if x.specialty else '', 'building':x.building.name,'status':status,'course':membership.course if membership else None})
     elif kind=='teachers':
         for x in Teacher.objects.all():
             if (archive or x.is_active) and matches(x.name,query):
@@ -149,8 +149,8 @@ def schedule(request,kind,pk):
         now=timezone.localtime()
         next_found=False
         for lesson in lessons:
-            lesson['current']=day==now.date() and svc.live(lesson) and lesson['status']!='reassigned' and lesson['start']<=now.strftime('%H:%M')<lesson['end']
-            lesson['next']=day==now.date() and not next_found and svc.live(lesson) and lesson['status']!='reassigned' and lesson['start']>now.strftime('%H:%M')
+            lesson['current']=bool(lesson['start'] and day==now.date() and svc.live(lesson) and lesson['status']!='reassigned' and lesson['start']<=now.strftime('%H:%M')<lesson['end'])
+            lesson['next']=bool(lesson['start'] and day==now.date() and not next_found and svc.live(lesson) and lesson['status']!='reassigned' and lesson['start']>now.strftime('%H:%M'))
             if lesson['next']:
                 next_found=True
         days.append({'date':day.isoformat(),'lessons':lessons,'free_intervals':gaps,'has_data':bool(svc.version_on(day))})
@@ -182,7 +182,7 @@ def room_availability(request):
         rows=[r for r in rows if r['status']==request.GET['status']]
     if request.GET.get('grid')=='1':
         grid={room.pk:[] for room in rooms}
-        for slot in TimeSlot.objects.all():
+        for slot in TimeSlot.objects.filter(start_time__isnull=False):
             for entry in svc.availability(day,slot.start_time,slot.end_time,rooms):
                 grid[entry['id']].append({'slot':slot.sort_order,'status':entry['status']})
         for row in rows:
@@ -231,9 +231,11 @@ def admin_imports(request,pk=None,action=None):
     if pk is None:
         if request.method!='POST':
             return error('method','Используйте POST',405)
-        profile=get_object_or_404(ImportProfile,pk=request.POST['profile'])
-        period=get_object_or_404(Period,pk=request.POST['period'])
-        batch=preview_import(request.FILES['file'],profile,period,date.fromisoformat(request.POST['start']),date.fromisoformat(request.POST['end']),request.user)
+        profile=get_object_or_404(ImportProfile,pk=request.POST['profile']) if request.POST.get('profile') else get_object_or_404(ImportProfile,kind='college')
+        period=get_object_or_404(Period,pk=request.POST['period']) if request.POST.get('period') else None
+        start=date.fromisoformat(request.POST['start']) if request.POST.get('start') else None
+        end=date.fromisoformat(request.POST['end']) if request.POST.get('end') else None
+        batch=preview_import(request.FILES['file'],profile,period,start,end,request.user)
         return JsonResponse({'id':batch.pk,'status':batch.status,'payload':batch.payload,'errors':batch.errors},status=201)
     batch=get_object_or_404(ImportBatch,pk=pk)
     if not request.user.is_superuser and batch.uploaded_by_id!=request.user.pk:
@@ -274,7 +276,7 @@ def admin_changes(request,pk=None,action=None):
     if change and change.status!='draft':
         raise ValidationError('Опубликованная замена неизменяема. Создайте новую редакцию.')
     values=body(request)
-    allowed={'target_date','original_id','kind','new_date','time_slot_id','start_time','end_time','subject_id','teacher_id','room_id','group_id','subgroup_id','whole_group','reason'}
+    allowed={'target_date','original_id','kind','new_date','time_slot_id','start_time','end_time','subject_id','teacher_id','room_id','group_id','target_group_id','subgroup_id','whole_group','reason'}
     if set(values)-allowed:
         raise ValidationError('Неизвестные поля: '+', '.join(set(values)-allowed))
     change=change or Change(created_by=request.user)

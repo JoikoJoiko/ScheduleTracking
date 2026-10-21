@@ -1,0 +1,7 @@
+{% extends "admin/base_site.html" %}
+{% block content %}<p>{{ batch.target_date }} · {{ batch.get_layout_display }} · {{ batch.get_status_display }}</p>
+{% for warning in batch.warnings %}<div class="image-warnings">{{ warning }}</div>{% endfor %}
+<div class="image-review"><div><img src="{% url 'admin:schedule_image_source' batch.pk %}" alt="Оригинал замен"></div><form method="post">{% csrf_token %}{{ formset.management_form }}{{ formset.non_form_errors }}
+<table class="review-table"><thead><tr><th>✓</th><th>Группа / подгруппа</th><th>Пара</th><th>Действие</th><th>Дисциплина</th><th>Преподаватель</th><th>Кабинет</th></tr></thead><tbody>
+{% for form,raw in items %}<tr><td>{{ form.use }}{{ form.use.errors }}</td><td>{{ form.group }}{{ form.group.errors }}{{ form.subgroup }}{{ form.subgroup.errors }}{% if raw %}<small>{{ raw }}</small>{% endif %}</td><td>{{ form.slot }}{{ form.slot.errors }}</td><td>{{ form.kind }}{{ form.kind.errors }}</td><td>{{ form.subject }}{{ form.subject.errors }}</td><td>{{ form.teacher }}{{ form.teacher.errors }}</td><td>{{ form.room }}{{ form.room.errors }}</td></tr>{% endfor %}
+</tbody></table>{% if batch.status == 'review' %}<div class="review-actions"><input type="submit" value="Опубликовать проверенные"><button name="cancel" value="1">Отменить</button></div>{% endif %}</form></div>{% endblock %}
