@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 80" fill="none">
+  <rect width="96" height="80" rx="15" fill="#7da6c3"/>
+  <!-- Three upright letterforms echo the college's block-letter mark. -->
+  <path d="M12 14h9v18h9V14h9v49h-9V41H12V14Zm31 0h22v49h-8V23h-6v40h-8V14Zm27 0h8v20l8-20h9L84 38l11 25h-9l-8-20v20h-8V14Z" fill="#fff"/>
+  <path d="m14 50 6-4 6 4v10l-6-4-6 4V50Z" fill="#7da6c3"/>
+  <path d="m50 49 4-9 4 9-4-2-4 2Z" fill="#7da6c3"/>
+  <path d="M12 69h74" stroke="#fff" stroke-opacity=".8" stroke-width="2"/>
+</svg>

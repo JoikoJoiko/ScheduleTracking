@@ -1,5 +1,5 @@
 {% extends "admin/base.html" %}{% load static %}
 {% block extrastyle %}{{ block.super }}<link rel="stylesheet" href="{% static 'admin-college.css' %}">{% endblock %}
 {% block extrahead %}{{ block.super }}<script>try{if(!localStorage.getItem('theme')){localStorage.setItem('theme','dark');document.documentElement.dataset.theme='dark'}}catch{}</script>{% endblock %}
-{% block branding %}<h1 id="site-name"><a href="{% url 'admin:index' %}">Расписание</a></h1>{% endblock %}
+{% block branding %}<h1 id="site-name"><a href="{% url 'admin:index' %}" class="admin-brand"><img src="{% static 'college-mark.svg' %}" alt=""><span>ЧПК<span class="admin-brand-subtitle">Управление расписанием</span></span></a></h1>{% endblock %}
 {% block nav-global %}<a href="/" style="margin-left:24px;color:inherit;font-size:12px">На сайт ↗</a>{% endblock %}
