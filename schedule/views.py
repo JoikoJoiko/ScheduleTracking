@@ -4,6 +4,9 @@ from datetime import date, datetime, time, timedelta
 from functools import wraps
 from django.core.exceptions import ValidationError, PermissionDenied
 from django.db import transaction
+from django.db import connection, DatabaseError
+from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_GET
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render, get_object_or_404
 from django.http import Http404
@@ -17,6 +20,18 @@ from .curriculum import curriculum_for, schedule_coverage
 
 def page(request, **kwargs):
     return render(request,'index.html')
+
+
+@require_GET
+@never_cache
+def health(request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+            cursor.fetchone()
+    except DatabaseError:
+        return JsonResponse({'status':'unavailable'},status=503)
+    return JsonResponse({'status':'ok'})
 
 
 def api(fn):

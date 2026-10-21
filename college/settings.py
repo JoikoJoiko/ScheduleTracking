@@ -49,6 +49,8 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
+# Browser HSTS preload is a separate domain-owner opt-in, not a deployment requirement.
+SILENCED_SYSTEM_CHECKS = ['security.W021']
 CSRF_FAILURE_VIEW = 'schedule.views.csrf_failure'
 if os.getenv('TRUST_PROXY', '0') == '1':
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')

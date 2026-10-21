@@ -3,6 +3,7 @@ from django.urls import path, re_path
 from schedule import views as v
 
 urlpatterns = [
+    path('healthz',v.health),
     path('admin/conflicts/',v.conflicts_page),
     path('admin/',admin.site.urls),
     path('api/meta',v.meta),

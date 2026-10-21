@@ -1,0 +1,6 @@
+# Enable this HTTP site, then use certbot --nginx -d __DOMAIN__ for HTTPS.
+server {
+    listen 80;
+    server_name __DOMAIN__;
+__LOCATION__
+}

@@ -1,0 +1,32 @@
+name: Deployment smoke test
+on: [push, pull_request]
+jobs:
+  nginx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 deploy/prepare.py schedule.example.test
+      - name: Validate and start the Nginx deployment
+        run: |
+          docker compose --env-file .env.nginx -f compose.nginx.yaml config --quiet
+          bash deploy/server.sh up
+      - name: Check HTTPS proxy, static files, uploads and OCR runtime
+        run: |
+          docker compose --env-file .env.nginx -f compose.nginx.yaml exec -T web nginx -t
+          curl -fsS -H 'Host: schedule.example.test' -H 'X-Forwarded-Proto: https' http://127.0.0.1:8080/healthz | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"]=="ok"'
+          curl -fsS -H 'Host: schedule.example.test' -H 'X-Forwarded-Proto: https' http://127.0.0.1:8080/api/meta > /dev/null
+          curl -fsS http://127.0.0.1:8080/static/app.js > /dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/media/private.png)" = 404
+          docker compose --env-file .env.nginx -f compose.nginx.yaml exec -T app tesseract --list-langs | grep -Fx rus
+          bash deploy/server.sh manage check --deploy --fail-level WARNING
+      - name: Verify consistent backup and service restart
+        run: |
+          bash deploy/server.sh backup
+          test -n "$(find backups/server -name COMPLETE -print -quit)"
+          docker compose --env-file .env.nginx -f compose.nginx.yaml up -d --wait --wait-timeout 120
+      - name: Logs on failure
+        if: failure()
+        run: docker compose --env-file .env.nginx -f compose.nginx.yaml logs --tail=100
+      - name: Clean up test containers
+        if: always()
+        run: docker compose --env-file .env.nginx -f compose.nginx.yaml down -v
