@@ -1,9 +1,7 @@
 import hashlib
-import io
 import json
-import zipfile
 from datetime import time
-from openpyxl import load_workbook
+from .workbooks import load_schedule_workbook
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
@@ -20,15 +18,7 @@ def normalize(value):
 
 
 def parse_xlsx(data, profile):
-    if len(data) > 10 * 1024 * 1024:
-        raise ValidationError('Размер файла превышает 10 МБ')
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            if sum(x.file_size for x in archive.infolist()) > 50 * 1024 * 1024 or len(archive.infolist()) > 1000:
-                raise ValidationError('Слишком большой распакованный файл')
-        book = load_workbook(io.BytesIO(data), data_only=False)
-    except (zipfile.BadZipFile, OSError, KeyError, ValueError) as exc:
-        raise ValidationError('Некорректный XLSX') from exc
+    book = load_schedule_workbook(data,data_only=False)
     rows, errors = [], []
     for sheet in book:
         if sheet.max_row > 10000 or sheet.max_column > 200:
@@ -132,15 +122,7 @@ def preview_import(upload, profile, period, start, end, user, expected_course=No
         if not user.is_superuser:
             raise ValidationError('Импорт с созданием справочников доступен администратору')
         from .college_import import parse_college,ensure_period
-        if len(data)>10*1024*1024:
-            raise ValidationError('Файл больше 10 МБ')
-        try:
-            with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                if sum(x.file_size for x in archive.infolist())>50*1024*1024:
-                    raise ValidationError('Слишком большой распакованный файл')
-            rows,metadata,errors=parse_college(data,upload.name)
-        except (zipfile.BadZipFile,KeyError,ValueError) as exc:
-            raise ValidationError('Не удалось прочитать расписание') from exc
+        rows,metadata,errors=parse_college(data,upload.name)
         if expected_course is not None and {g['course'] for g in metadata['groups']} != {int(expected_course)}:
             found=', '.join(str(n) for n in sorted({g['course'] for g in metadata['groups']}))
             raise ValidationError(f'В файле указан курс {found}. Вы выбрали {expected_course} курс.')

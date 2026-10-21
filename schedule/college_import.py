@@ -1,8 +1,7 @@
 """Parser for the college's two-week, two-row-per-pair Excel layout."""
-import io
 import re
 from datetime import date, time
-from openpyxl import load_workbook
+from .workbooks import load_schedule_workbook
 from django.core.exceptions import ValidationError
 from .models import (AcademicYear, Period, Building, RoomType, Room, Teacher, Subject,
                      StudentGroup, GroupYear, Subgroup, TimeSlot)
@@ -36,7 +35,7 @@ class Grid:
 
 
 def parse_college(data,filename=''):
-    book=load_workbook(io.BytesIO(data),data_only=True)
+    book=load_schedule_workbook(data,data_only=True)
     rows,errors,warnings,groups=[],[],[],[]
     start=end=None
     for sheet in book:
@@ -47,7 +46,7 @@ def parse_college(data,filename=''):
         grid=Grid(sheet)
         group_row=None
         for r in range(1,min(20,sheet.max_row)+1):
-            found=[c for c in range(1,sheet.max_column+1) if re.fullmatch(r'[А-Яа-яЁёA-Za-z]+-\d+-\d{2,4}',text(sheet.cell(r,c).value))]
+            found=[c for c in range(1,sheet.max_column+1) if re.fullmatch(r'[А-Яа-яЁёA-Za-z()]+-\d+-\d{2,4}',text(sheet.cell(r,c).value))]
             if found:
                 group_row=r
                 columns=found
