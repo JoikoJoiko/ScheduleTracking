@@ -11,6 +11,8 @@ from django.utils import timezone
 from .models import *
 from . import services as svc
 from .importing import preview_import, confirm_import, import_report
+from .timing import week_info, bells_for, slot_times
+from .curriculum import curriculum_for, schedule_coverage
 
 
 def page(request, **kwargs):
@@ -77,9 +79,46 @@ def meta(request):
         'buildings':list(Building.objects.values('id','name')),
         'room_types':list(RoomType.objects.values('id','name')),
         'specialties':list(Specialty.objects.values('id','name','code')),
-        'slots':[{'id':x.pk,'number':x.sort_order,'name':x.name,'start':x.start_time.isoformat(timespec='minutes') if x.start_time else None,'end':x.end_time.isoformat(timespec='minutes') if x.end_time else None} for x in TimeSlot.objects.filter(start_time__isnull=False)],
+        'slots':bells_for(selected_date(request)),
+        'week':week_info(selected_date(request)), 'current_week':week_info(timezone.localdate()),
+        'periods':list(Period.objects.values('id','name','year_id','start_date','end_date').order_by('-start_date','end_date','-pk')),
         'years':list(AcademicYear.objects.values('id','name','status')),
         'staff':request.user.is_active and request.user.is_staff})
+
+
+@api
+def bells(request):
+    day=selected_date(request)
+    if request.GET.get('weekday'):
+        weekday=int(request.GET['weekday'])
+        if weekday not in range(7):
+            raise ValidationError('День недели от 0 до 6')
+        day=day-timedelta(days=day.weekday())+timedelta(days=weekday)
+    return JsonResponse({'date':day.isoformat(),'weekday':day.weekday(),'slots':bells_for(day),'week':week_info(day)})
+
+
+@api
+def subjects(request):
+    group=get_object_or_404(StudentGroup,pk=request.GET.get('group'))
+    period=get_object_or_404(Period,pk=request.GET['period']) if request.GET.get('period') else None
+    result=curriculum_for(group,selected_date(request),period)
+    if request.GET.get('q'):
+        result['subjects']=[x for x in result['subjects'] if matches(x['name'],request.GET['q'])]
+    return JsonResponse(result,json_dumps_params={'ensure_ascii':False})
+
+
+@api
+def image_candidates(request):
+    denied=staff(request)
+    if denied:
+        return denied
+    from .image_import import resolve_candidates
+    group=get_object_or_404(StudentGroup,pk=request.GET.get('group'))
+    svc.require_buildings(request.user,[group.building_id])
+    day=selected_date(request)
+    result=curriculum_for(group,day)
+    result['suggestions']=resolve_candidates(group.pk,day,request.GET.get('subject','')[:300],request.GET.get('teacher','')[:300],result)
+    return JsonResponse(result,json_dumps_params={'ensure_ascii':False})
 
 
 @api
@@ -153,8 +192,11 @@ def schedule(request,kind,pk):
             lesson['next']=bool(lesson['start'] and day==now.date() and not next_found and svc.live(lesson) and lesson['status']!='reassigned' and lesson['start']>now.strftime('%H:%M'))
             if lesson['next']:
                 next_found=True
-        days.append({'date':day.isoformat(),'lessons':lessons,'free_intervals':gaps,'has_data':bool(svc.version_on(day))})
-    return JsonResponse({'id':pk,'name':obj.number if kind=='rooms' else obj.name,'kind':kind,'days':days},json_dumps_params={'ensure_ascii':False})
+        coverage=schedule_coverage(kind,obj,day)
+        days.append({'date':day.isoformat(),'lessons':lessons,'free_intervals':gaps if coverage['has_data'] else [],
+                     'week':week_info(day),**coverage})
+    return JsonResponse({'id':pk,'name':obj.number if kind=='rooms' else obj.name,'kind':kind,'days':days,
+                         'week':week_info(date_)},json_dumps_params={'ensure_ascii':False})
 
 
 @api
@@ -165,7 +207,9 @@ def room_availability(request):
     end=time.fromisoformat(request.GET.get('end',(datetime.combine(day,start)+timedelta(minutes=1)).strftime('%H:%M')))
     if request.GET.get('slot'):
         slot=get_object_or_404(TimeSlot,sort_order=int(request.GET['slot']))
-        start,end=slot.start_time,slot.end_time
+        start,end=slot_times(slot,day)
+        if not start or not end:
+            raise ValidationError('Для этой пары не задано время звонков')
     if start>=end:
         raise ValidationError('Время окончания должно быть позже начала в пределах одного дня')
     rooms=Room.objects.select_related('building','room_type')
@@ -182,9 +226,9 @@ def room_availability(request):
         rows=[r for r in rows if r['status']==request.GET['status']]
     if request.GET.get('grid')=='1':
         grid={room.pk:[] for room in rooms}
-        for slot in TimeSlot.objects.filter(start_time__isnull=False):
-            for entry in svc.availability(day,slot.start_time,slot.end_time,rooms):
-                grid[entry['id']].append({'slot':slot.sort_order,'status':entry['status']})
+        for slot in bells_for(day):
+            for entry in svc.availability(day,time.fromisoformat(slot['start']),time.fromisoformat(slot['end']),rooms):
+                grid[entry['id']].append({'slot':slot['number'],'status':entry['status']})
         for row in rows:
             row['grid']=grid[row['id']]
     return data_response(rows,request,date=day.isoformat(),start=start.isoformat(timespec='minutes'),end=end.isoformat(timespec='minutes'))

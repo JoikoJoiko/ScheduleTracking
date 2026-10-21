@@ -92,9 +92,10 @@ def validate_rows(rows, user):
             subgroup = resolve(Subgroup, group_id=group.pk, name=row['subgroup']) if row.get('subgroup') else None
             require_buildings(user, [building.pk, group.building_id])
             week = normalize(row.get('week','all')).casefold() or 'all'
-            week = {'каждая':'all','нечётная':'odd','нечетная':'odd','чётная':'even','четная':'even'}.get(week,week)
+            week = {'каждая':'all','первая':'odd','1':'odd','вторая':'even','2':'even',
+                'нечётная':'odd','нечетная':'odd','чётная':'even','четная':'even'}.get(week,week)
             if week not in ['all','odd','even']:
-                raise ValueError('Неделя: all / odd / even')
+                raise ValueError('Неделя: каждая / первая / вторая')
             start = time.fromisoformat(row['start']) if row.get('start') else None
             end = time.fromisoformat(row['end']) if row.get('end') else None
             if bool(start) != bool(end) or (start and start >= end):

@@ -16,6 +16,7 @@ from django.db import transaction
 from .models import ImageImport,StudentGroup,Teacher,Subject,Room,TimeSlot,Change,Subgroup,GroupYear
 from .college_import import teacher_name
 from . import services as svc
+from .curriculum import curriculum_for
 
 MAX_IMAGE_BYTES=10*1024*1024
 
@@ -102,7 +103,35 @@ def normalized(value):
     return re.sub(r'[^а-яa-z0-9]','',value).replace('2з','23')
 
 
-def suggestion(model,value):
+def subject_score(value, name):
+    needle,target=normalized(value),normalized(name)
+    if not needle or not target:
+        return 0
+    if needle==target:
+        return 1
+    if re.findall(r'\d+',needle) and re.findall(r'\d+',needle)!=re.findall(r'\d+',target):
+        return 0
+    if needle in ['физра','физкультура'] and target in ['физическаякультура','физическоевоспитание']:
+        return .97
+    words=[normalized(w) for w in re.findall(r'[\w]+',name) if normalized(w)]
+    tokens=[normalized(w) for w in re.findall(r'[\w]+',value) if normalized(w)]
+    score=SequenceMatcher(None,needle,target).ratio()
+    if len(needle)>=3 and (target.startswith(needle) or needle==''.join(w[0] for w in words)):
+        score=max(score,.94)
+    # Abbreviated words must match in order: «осн менедж» → «Основы менеджмента».
+    position=0
+    for token in tokens:
+        found=next((i for i in range(position,len(words)) if words[i].startswith(token)),None)
+        if found is None:
+            break
+        position=found+1
+    else:
+        if len(needle)>=3:
+            score=max(score,.94 if len(tokens)>1 else .90)
+    return score
+
+
+def suggestion(model,value,candidates=None):
     if not value:
         return None
     needle=normalized(value)
@@ -116,19 +145,38 @@ def suggestion(model,value):
         group_suffix=(fix(match[2]),fix(match[3]))
         needle=normalized(match[1]+''.join(group_suffix))
     scored=[]
-    for record in model.objects.all():
-        name=record.number if model==Room else record.name
+    for record in candidates if candidates is not None else model.objects.all():
+        if isinstance(record,dict):
+            name,pk=record['name'],record['id']
+            short=record.get('short_name','')
+        else:
+            name=record.number if model==Room else record.name
+            pk=record.pk
+            short=getattr(record,'short_name','')
         if model==StudentGroup and tuple(name.split('-')[-2:])!=group_suffix:
             continue
         target=normalized(name)
         score=SequenceMatcher(None,needle,target).ratio()
-        if model==Subject and (target.startswith(needle) or needle.startswith(target)):
-            score=max(score,.93)
-        scored.append((score,record.pk))
+        if model==Subject:
+            score=max(subject_score(value,name),subject_score(value,short))
+        scored.append((score,pk))
     scored.sort(reverse=True)
     if not scored or scored[0][0]<.74 or (len(scored)>1 and scored[0][0]-scored[1][0]<.08):
         return None
     return scored[0][1]
+
+
+def resolve_candidates(group_id,day,subject,teacher,curriculum=None):
+    result={'subject_id':None,'teacher_id':None}
+    if not group_id:
+        return result
+    group=StudentGroup.objects.filter(pk=group_id).first()
+    if not group:
+        return result
+    data=curriculum if curriculum is not None else curriculum_for(group,day)
+    result['subject_id']=suggestion(Subject,subject,data['subjects'])
+    result['teacher_id']=suggestion(Teacher,teacher,data['teachers'])
+    return result
 
 
 def decode_cell(raw):
@@ -144,7 +192,7 @@ def decode_cell(raw):
     teacher=(f'{teacher_match[1]} {(teacher_match[2] or teacher_match[4]).upper()}.{(teacher_match[3] or teacher_match[5]).upper()}.') if teacher_match else ''
     subject=content[:teacher_match.start()].strip() if teacher_match else content
     return {'raw':raw,'subject_text':subject,'teacher_text':teacher,'room_text':room,
-            'subject_id':suggestion(Subject,subject),'teacher_id':suggestion(Teacher,teacher),'room_id':suggestion(Room,room)}
+            'subject_id':None,'teacher_id':None,'room_id':suggestion(Room,room)}
 
 
 def yellow_fraction(image,box):
@@ -173,7 +221,9 @@ def recognize_boxes(image,boxes):
     return result
 
 
-def analyze(image,layout):
+def analyze(image,layout,target_date=None):
+    from django.utils import timezone
+    target_date=target_date or timezone.localdate()
     xs,ys=table_edges(image)
     # Remove the long grid rules before OCR so they do not join adjacent letters.
     prepared=image.copy()
@@ -234,8 +284,10 @@ def analyze(image,layout):
             item=item or {'raw':raw,'subject_text':'','teacher_text':'','room_text':'','subject_id':None,'teacher_id':None,'room_id':None}
             first=decode_cell(row['raw']) or {}
             for field in ['subject','teacher','room']:
-                if not item.get(field+'_id') and first.get(field+'_id'):
-                    item[field+'_id']=first[field+'_id'];item[field+'_text']=first.get(field+'_text','')
+                if not item.get(field+'_text') and first.get(field+'_text'):
+                    item[field+'_text']=first[field+'_text']
+            item.update(resolve_candidates(group_id,target_date,item['subject_text'],item['teacher_text']))
+            item['room_id']=suggestion(Room,item['room_text'])
             rows.append({**item,'group_text':group_text,'group_id':group_id,
                          'slot':row['slot'],'subgroup_id':None,'kind':'replace'})
     if not rows:
@@ -248,7 +300,7 @@ def upload_image(upload,target_date,layout,user):
     image=image_bytes(upload)
     rows=[];warnings=[]
     try:
-        rows,warnings=analyze(image,layout)
+        rows,warnings=analyze(image,layout,target_date)
     except (ValidationError,subprocess.TimeoutExpired,OSError,json.JSONDecodeError) as exc:
         warnings.append(str(exc))
     batch=ImageImport(target_date=target_date,layout=layout,payload=rows,warnings=warnings,uploaded_by=user)

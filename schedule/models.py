@@ -16,8 +16,14 @@ class Named(models.Model):
 class AcademicYear(Named):
     start_date = models.DateField('Начало')
     end_date = models.DateField('Окончание')
+    week_anchor_date = models.DateField('Опорный понедельник', null=True, blank=True,
+        help_text='Понедельник, для которого точно известен номер недели. Пусто — понедельник начала учебного года.')
+    week_anchor_number = models.PositiveSmallIntegerField('Неделя опорного понедельника', default=1,
+        choices=[(1, 'Первая'), (2, 'Вторая')])
     status = models.CharField('Статус', max_length=12, choices=[('draft', 'Черновик'), ('active', 'Действует'), ('archived', 'Архив')], default='draft')
     def clean(self):
+        if self.week_anchor_date and self.week_anchor_date.weekday() != 0:
+            raise ValidationError({'week_anchor_date': 'Укажите понедельник'})
         if self.end_date < self.start_date:
             raise ValidationError('Окончание раньше начала')
         if AcademicYear.objects.exclude(pk=self.pk).filter(start_date__lte=self.end_date, end_date__gte=self.start_date).exists():
@@ -143,6 +149,26 @@ class TimeSlot(Named):
         verbose_name_plural = 'Звонки'
 
 
+WEEKDAYS = list(enumerate(['Понедельник','Вторник','Среда','Четверг','Пятница','Суббота','Воскресенье']))
+
+
+class WeekdayBell(models.Model):
+    day_of_week = models.PositiveSmallIntegerField('День недели', choices=WEEKDAYS)
+    time_slot = models.ForeignKey(TimeSlot, on_delete=models.PROTECT, verbose_name='Пара')
+    start_time = models.TimeField('Начало')
+    end_time = models.TimeField('Окончание')
+    def clean(self):
+        if self.start_time and self.end_time and self.start_time >= self.end_time:
+            raise ValidationError('Окончание пары должно быть позже начала')
+    def __str__(self):
+        return f'{self.get_day_of_week_display()} · {self.time_slot}'
+    class Meta:
+        ordering = ['day_of_week', 'time_slot__sort_order']
+        constraints = [models.UniqueConstraint(fields=['day_of_week', 'time_slot'], name='weekday_bell_unique')]
+        verbose_name = 'Звонки по дню недели'
+        verbose_name_plural = 'Звонки по дням недели'
+
+
 class ScheduleVersion(Named):
     period = models.ForeignKey(Period, on_delete=models.PROTECT, verbose_name='Период')
     effective_from = models.DateField('Действует с')
@@ -162,7 +188,7 @@ class ScheduleVersion(Named):
 class Lesson(models.Model):
     version = models.ForeignKey(ScheduleVersion, on_delete=models.PROTECT, related_name='lessons', verbose_name='Версия')
     day_of_week = models.PositiveSmallIntegerField('День недели (0 — понедельник)', choices=list(enumerate(['Понедельник','Вторник','Среда','Четверг','Пятница','Суббота','Воскресенье'])))
-    week_type = models.CharField('Неделя', max_length=8, choices=[('all', 'Каждая'), ('odd', 'Нечётная'), ('even', 'Чётная')], default='all')
+    week_type = models.CharField('Неделя', max_length=8, choices=[('all', 'Каждая'), ('odd', 'Первая'), ('even', 'Вторая')], default='all')
     time_slot = models.ForeignKey(TimeSlot, on_delete=models.PROTECT, verbose_name='Пара')
     start_time = models.TimeField('Свое время начала', null=True, blank=True)
     end_time = models.TimeField('Свое время окончания', null=True, blank=True)
@@ -199,7 +225,7 @@ class CalendarDay(models.Model):
     date = models.DateField('Дата', unique=True)
     is_holiday = models.BooleanField('Нерабочий день', default=False)
     weekday_override = models.PositiveSmallIntegerField('Расписание дня недели (0–6)', null=True, blank=True)
-    week_type = models.CharField('Тип недели', max_length=8, choices=[('', 'По календарю'), ('odd', 'Нечётная'), ('even', 'Чётная')], blank=True)
+    week_type = models.CharField('Неделя в этот день', max_length=8, choices=[('', 'По календарю'), ('odd', 'Первая'), ('even', 'Вторая')], blank=True)
     note = models.CharField('Примечание', max_length=240, blank=True)
     def clean(self):
         if self.weekday_override is not None and self.weekday_override > 6:

@@ -3,6 +3,7 @@ const app = document.querySelector('#app');
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const statuses = {regular:'',changed:'Замена',cancelled:'Отменено',moved:'Перенос',moved_out:'Перенесено',added:'Доп. занятие',reassigned:'Занятие перенесено'};
 const roomStatuses = {free:'Свободен',busy:'Занят',unavailable:'Недоступен',unknown:'Нет данных'};
+const weekdays = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 let meta, token = 0, searchTimer;
 const params = () => new URLSearchParams(location.search);
 const selectedDate = () => params().get('date') || meta.today;
@@ -33,7 +34,7 @@ function options(rows, selected, empty = 'Все') {
 }
 function toolbar(title = 'Расписание', withWeek = true) {
     const day = selectedDate(), week = params().get('view') === 'week';
-    return `<div class="toolbar"><div class="toolbar-left"><h2>${esc(title)}</h2><span class="count">${formatDate(day,{day:'numeric',month:'long'})}</span></div><div class="toolbar-right"><div class="segmented"><button data-date="${meta.today}" class="${day===meta.today&&!week?'active':''}">Сегодня</button><button data-date="${shiftDate(meta.today,1)}" class="${day===shiftDate(meta.today,1)&&!week?'active':''}">Завтра</button>${withWeek?`<button data-view="${week?'day':'week'}" class="${week?'active':''}">Неделя</button>`:''}</div><button class="btn small" data-shift="-1" aria-label="Назад">‹</button><input type="date" name="date" data-filter aria-label="Дата" value="${day}"><button class="btn small" data-shift="1" aria-label="Вперёд">›</button></div></div>`;
+    return `<div class="toolbar"><div class="toolbar-left"><h2>${esc(title)}</h2><span class="count">${week&&withWeek?`${formatDate(meta.week.start,{day:'numeric',month:'short'})} – ${formatDate(meta.week.end,{day:'numeric',month:'short'})}`:formatDate(day,{day:'numeric',month:'long'})}</span><span class="week-badge">${esc(meta.week.label)}</span></div><div class="toolbar-right"><div class="segmented"><button data-date="${meta.today}" class="${day===meta.today&&!week?'active':''}">Сегодня</button><button data-date="${shiftDate(meta.today,1)}" class="${day===shiftDate(meta.today,1)&&!week?'active':''}">Завтра</button>${withWeek?`<button data-view="${week?'day':'week'}" class="${week?'active':''}">Неделя</button>`:''}</div><button class="btn small" data-shift="-1" aria-label="Назад">‹</button><input type="date" name="date" data-filter aria-label="Дата" value="${day}"><button class="btn small" data-shift="1" aria-label="Вперёд">›</button></div></div>`;
 }
 function lessonCard(l) {
     const label = l.current ? 'Сейчас' : l.next ? 'Далее' : statuses[l.status];
@@ -41,7 +42,7 @@ function lessonCard(l) {
     return `<article class="lesson ${esc(l.status)} ${l.current?'current':''}"><div class="lesson-time">${l.start?`${esc(l.start)}<br><span style="color:var(--muted)">${esc(l.end)}</span>`:'—'}<small>${l.slot?l.slot+' пара':'Без времени'}</small></div><div class="lesson-info"><h3>${esc(l.subject)}</h3>${label?`<span class="badge ${l.current?'current':esc(l.status)}">${esc(label)}</span>`:''}<div class="meta"><a data-nav href="/teachers/${l.teacher_id}?date=${l.date}">${esc(l.teacher)}</a>${l.groups.map(g=>`<a data-nav href="/groups/${g.id}?date=${l.date}">${esc(g.name)}${g.subgroup?' / '+esc(g.subgroup):''}</a>`).join('')}</div>${l.change_id?`<details><summary>Изменения</summary>${original?`<p>Было: ${esc(original.subject)} · ${esc(original.teacher)} · ${esc(original.room)}${original.start?' · '+esc(original.start):''}</p>`:''}${l.new_date?`<p>Перенос на ${formatDate(l.new_date)}</p>`:''}${l.reason?`<p>${esc(l.reason)}</p>`:''}</details>`:''}</div><div class="lesson-room"><a data-nav href="/rooms/${l.room_id}?date=${l.date}">${esc(l.room)}</a></div></article>`;
 }
 function dayPanel(day, gaps = true) {
-    return `<section class="panel"><div class="panel-head"><h2>${formatDate(day.date,{weekday:'long',day:'numeric',month:'short'})}</h2><span class="count">${day.lessons.filter(x=>!['cancelled','moved_out','reassigned'].includes(x.status)).length} занятий</span></div>${day.lessons.map(lessonCard).join('')||`<div class="empty"><strong>${day.has_data?'Занятий нет':'Нет расписания'}</strong></div>`}${gaps&&day.free_intervals?.length?`<div class="panel-body count">Окна: ${day.free_intervals.map(x=>`${x.start}–${x.end}`).join(' · ')}</div>`:''}</section>`;
+    return `<section class="panel"><div class="panel-head"><h2>${formatDate(day.date,{weekday:'long',day:'numeric',month:'short'})}</h2><span class="count">${day.lessons.filter(x=>!['cancelled','moved_out','reassigned'].includes(x.status)).length} занятий</span></div>${day.lessons.map(lessonCard).join('')||`<div class="empty"><strong>${day.has_data?'Занятий нет':'Нет расписания'}</strong>${day.empty_reason?`<p>${esc(day.empty_reason)}</p>`:''}${day.next_date?`<button class="btn small" data-date="${day.next_date}">Открыть ${formatDate(day.next_date,{weekday:'short',day:'numeric',month:'long'})} →</button>`:''}</div>`}${gaps&&day.free_intervals?.length?`<div class="panel-body count">Окна: ${day.free_intervals.map(x=>`${x.start}–${x.end}`).join(' · ')}</div>`:''}</section>`;
 }
 function sidebar() {
     const f = favorite();
@@ -89,7 +90,7 @@ async function detail(kind,id,current) {
         const lessons=result.days.flatMap(x=>x.lessons), live=lessons.find(x=>x.current), next=lessons.find(x=>x.next);
         location=`<div class="location"><strong>${live?`Сейчас: ${esc(live.room)} · до ${live.end}`:'Сейчас занятий нет'}</strong>${!live&&next?`<p>Далее в ${next.start} · ${esc(next.room)}</p>`:''}</div>`;
     }
-    app.innerHTML=`<a class="back" data-nav href="/${kind}">← ${kind==='groups'?'Группы':kind==='teachers'?'Преподаватели':'Кабинеты'}</a>`+heading(kind==='rooms'?'Кабинет '+result.name:result.name,'',`<button class="btn" data-favorite="${kind}:${id}" data-name="${esc(result.name)}">☆</button><button class="btn" data-copy>Поделиться ↗</button>`)+toolbar()+location+(params().get('view')==='week'?`<div class="week-grid">${result.days.map(d=>dayPanel(d,false)).join('')}</div>`:`<div class="split"><div>${dayPanel(result.days[0],kind!=='groups')}</div>${sidebar()}</div>`);
+    app.innerHTML=`<a class="back" data-nav href="/${kind}">← ${kind==='groups'?'Группы':kind==='teachers'?'Преподаватели':'Кабинеты'}</a>`+heading(kind==='rooms'?'Кабинет '+result.name:result.name,'',`${kind==='groups'?`<a class="btn" data-nav href="/subjects?group=${id}&date=${selectedDate()}">Дисциплины ↗</a>`:''}<button class="btn" data-favorite="${kind}:${id}" data-name="${esc(result.name)}">☆</button><button class="btn" data-copy>Поделиться ↗</button>`)+toolbar()+location+(params().get('view')==='week'?`<div class="week-grid">${result.days.map(d=>dayPanel(d,false)).join('')}</div>`:`<div class="split"><div>${dayPanel(result.days[0],kind!=='groups')}</div>${sidebar()}</div>`);
 }
 async function rooms(current) {
     const p=params();
@@ -110,8 +111,25 @@ async function changes(current) {
     document.querySelector('#change-results').innerHTML=`<section class="panel">${result.results.map(lessonCard).join('')||'<div class="empty"><strong>Замен нет</strong></div>'}</section>`+pagination(result);
 }
 function bells() {
-    const now=meta.now.slice(11,16);
-    app.innerHTML=heading('Звонки','',meta.staff?'<a class="btn" href="/admin/schedule/timeslot/">Изменить ↗</a>':'')+`<div class="bell-grid">${meta.slots.map((s,i)=>`<section class="bell-card ${s.start<=now&&now<s.end?'current':''}"><div class="bell-index">${s.number} ПАРА</div><div class="bell-time">${s.start}<span style="color:var(--faint)"> — </span>${s.end}</div>${meta.slots[i+1]?`<p>Перерыв ${Math.round((new Date('2000-01-01T'+meta.slots[i+1].start)-new Date('2000-01-01T'+s.end))/60000)} мин</p>`:''}</section>`).join('')}</div>`;
+    const now=meta.now.slice(11,16), day=selectedDate(), index=(new Date(day+'T12:00:00').getDay()+6)%7;
+    app.innerHTML=heading('Звонки',formatDate(day,{weekday:'long'}),meta.staff?`<a class="btn" href="/admin/schedule/weekdaybell/?day_of_week__exact=${index}">Изменить по дням ↗</a>`:'')+toolbar('Расписание звонков',false)+`<div class="weekday-tabs segmented">${weekdays.map((name,i)=>`<button data-date="${shiftDate(day,i-index)}" class="${i===index?'active':''}">${name}</button>`).join('')}</div><div class="bell-grid">${meta.slots.map((s,i)=>`<section class="bell-card ${day===meta.today&&s.start<=now&&now<s.end?'current':''}"><div class="bell-index">${s.number} ПАРА</div><div class="bell-time">${s.start}<span style="color:var(--faint)"> — </span>${s.end}</div>${meta.slots[i+1]?`<p>Перерыв ${Math.max(0,Math.round((new Date('2000-01-01T'+meta.slots[i+1].start)-new Date('2000-01-01T'+s.end))/60000))} мин</p>`:''}</section>`).join('')||'<div class="empty">Звонки не заданы</div>'}</div>`;
+}
+
+async function subjects(current) {
+    const p=params(), requestedPeriod=meta.periods.find(x=>String(x.id)===p.get('period'));
+    const year=p.get('year')||requestedPeriod?.year_id;
+    const groups=await get('/api/groups?page_size=100'+(year?'&year='+encodeURIComponent(year):''));
+    if(current!==token)return;
+    const selected=groups.results.find(g=>String(g.id)===p.get('group'))||groups.results[0];
+    const activePeriod=meta.periods.find(x=>x.start_date<=selectedDate()&&selectedDate()<=x.end_date);
+    const period=meta.periods.find(x=>String(x.id)===p.get('period'))||activePeriod;
+    const periods=meta.periods.map(x=>({...x,name:x.name+' · '+(meta.years.find(y=>y.id===x.year_id)?.name||'')}));
+    app.innerHTML=heading('Дисциплины')+`<section class="search-panel"><div class="filters"><label>Группа<select name="group" data-filter>${options(groups.results,selected?.id,'Выберите группу')}</select></label><label>Учебный период<select name="period" data-filter>${options(periods,period?.id,'На выбранную дату')}</select></label><label>Дата<input type="date" name="date" data-filter value="${selectedDate()}"></label></div><form id="search-form" class="searchbox subject-search"><input class="field" type="search" id="search" name="q" placeholder="Найти дисциплину" aria-label="Дисциплина" value="${esc(p.get('q')||'')}"><button class="btn primary">Найти ↗</button></form></section><div id="subject-results"></div>`;
+    if(!selected){document.querySelector('#subject-results').innerHTML='<div class="empty">Группы ещё не загружены</div>';return;}
+    const query=new URLSearchParams({group:selected.id,date:selectedDate(),q:p.get('q')||''});
+    if(period)query.set('period',period.id);
+    const data=await get('/api/subjects?'+query);if(current!==token)return;
+    document.querySelector('#subject-results').innerHTML=`<div class="toolbar"><h2>${esc(selected.name)} <span class="count">${data.subjects.length} дисциплин</span></h2><a class="btn small" data-nav href="/groups/${selected.id}?date=${selectedDate()}">Расписание ↗</a></div>${data.period?`<p class="count">${esc(data.period.name)} · ${formatDate(data.period.start,{day:'numeric',month:'short',year:'numeric'})} – ${formatDate(data.period.end,{day:'numeric',month:'short',year:'numeric'})}</p>`:''}<section class="panel">${data.subjects.map(s=>`<article class="subject-row"><div><h3>${esc(s.name)}</h3><div class="meta">${s.teachers.map(t=>`<a data-nav href="/teachers/${t.id}?date=${selectedDate()}">${esc(t.name)}</a>`).join('')}</div></div><span class="week-badge">${s.weeks.length===2?'Обе недели':s.weeks[0]+'-я неделя'}</span></article>`).join('')||'<div class="empty">Дисциплины не найдены</div>'}</section>`;
 }
 // Keep a real select as the form control; the popup supports search and keyboard navigation.
 function upgradeSelects() {
@@ -141,9 +159,11 @@ function upgradeSelects() {
 async function render() {
     const current=++token;
     try {
-        if(!meta)meta=await get('/api/meta');if(current!==token)return;
+        const nextMeta=await get('/api/meta'+(params().get('date')?'?date='+encodeURIComponent(params().get('date')):''));if(current!==token)return;meta=nextMeta;
         document.querySelector('#year-label').textContent=meta.years.find(x=>x.status==='active')?.name||'';
         document.querySelector('#today-label').textContent=formatDate(meta.today,{day:'numeric',month:'long'});
+        document.querySelector('#current-week').textContent='Сейчас '+meta.current_week.label;
+        document.querySelector('#current-week').title=meta.current_week.number?`${formatDate(meta.current_week.start)} — ${formatDate(meta.current_week.end)}`:'';
         if(meta.updated_at)document.querySelector('#updated').textContent='Обновлено '+new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Europe/Moscow'}).format(new Date(meta.updated_at));
         document.querySelectorAll('.sidebar nav a').forEach(a=>a.classList.toggle('active',a.pathname==='/'?location.pathname==='/':location.pathname.startsWith(a.pathname)));
         const match=location.pathname.match(/^\/(groups|teachers|rooms)(?:\/(\d+))?\/?$/);
@@ -152,6 +172,7 @@ async function render() {
         else if(match)await catalog(match[1],current);
         else if(location.pathname==='/changes')await changes(current);
         else if(location.pathname==='/bells')bells();
+        else if(location.pathname==='/subjects')await subjects(current);
         else await home(current);
         if(current===token){upgradeSelects();document.title=(document.querySelector('h1')?.textContent||'Расписание')+' · Колледж';}
     }catch(error){if(current===token)app.innerHTML=`<div class="error"><h2>Не удалось загрузить</h2><p>${esc(error.message)}</p><button class="btn" data-retry>Повторить</button></div>`;}
@@ -176,4 +197,4 @@ document.addEventListener('submit',event=>{if(event.target.id==='search-form'){e
 document.addEventListener('change',event=>{const el=event.target;if(el.matches('[data-filter]'))update({[el.name]:el.type==='checkbox'?(el.checked?'1':null):el.value,page:null,...(el.name==='start'||el.name==='end'?{slot:null}:{})});});
 document.addEventListener('input',event=>{if(event.target.id==='search'){clearTimeout(searchTimer);const value=event.target.value;searchTimer=setTimeout(()=>{update({q:value,page:null});const input=document.querySelector('#search');input?.focus();},350);}});
 window.addEventListener('popstate',render);render();
-setInterval(async()=>{if(document.hidden||document.activeElement?.matches('input,select,button.select-trigger')||document.querySelector('.select-popup'))return;try{meta=await get('/api/meta');render();}catch{}},60000);
+setInterval(()=>{if(document.hidden||document.activeElement?.matches('input,select,button.select-trigger')||document.querySelector('.select-popup'))return;render();},60000);

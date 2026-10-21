@@ -1,0 +1,2 @@
+{% extends "admin/change_list.html" %}
+{% block content %}<p>Для остальных пар действуют <a href="{% url 'admin:schedule_timeslot_changelist' %}">общие звонки</a>. Удаление настройки дня возвращает общее время.</p>{{ block.super }}{% endblock %}

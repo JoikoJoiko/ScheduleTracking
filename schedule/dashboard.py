@@ -11,6 +11,7 @@ from django.views.decorators.http import require_GET, require_POST
 from .models import AcademicYear, GroupYear, ImportBatch, ImportProfile, ImageImport
 from .importing import preview_import, confirm_import
 from .image_import import upload_image
+from .timing import week_info
 
 
 class CourseUploadForm(forms.Form):
@@ -56,7 +57,7 @@ def dashboard_context(user):
             'url':reverse('admin:schedule_image_review',args=[batch.pk])})
     history.sort(key=lambda row:row['date'], reverse=True)
     return {'courses':courses,'upload_history':history[:8], 'upload_today':timezone.localdate().isoformat(),
-            'active_year':year,'pending_images':images.filter(status='review').count()}
+            'active_year':year,'current_week':week_info(timezone.localdate()),'pending_images':images.filter(status='review').count()}
 
 
 def form_error(form):

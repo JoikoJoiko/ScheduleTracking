@@ -6,6 +6,9 @@ urlpatterns = [
     path('admin/conflicts/',v.conflicts_page),
     path('admin/',admin.site.urls),
     path('api/meta',v.meta),
+    path('api/bells',v.bells),
+    path('api/subjects',v.subjects),
+    path('api/admin/image-candidates',v.image_candidates),
     path('api/rooms/availability',v.room_availability),
     path('api/changes',v.changes),
     path('api/academic-years',v.years),
@@ -23,5 +26,6 @@ urlpatterns = [
     re_path(r'^(?:groups|teachers|rooms)(?:/\d+)?/?$',v.page),
     path('changes',v.page),
     path('bells',v.page),
+    path('subjects',v.page),
     path('',v.page),
 ]

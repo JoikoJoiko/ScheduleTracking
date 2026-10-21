@@ -219,7 +219,7 @@ class ImportAdmin(SafeAdmin):
 
 @admin.register(AcademicYear)
 class YearAdmin(SafeAdmin):
-    list_display=['name','start_date','end_date','status']
+    list_display=['name','start_date','end_date','week_anchor_date','week_anchor_number','status']
     readonly_fields=['status']
     actions=['activate']
     @admin.action(description='Активировать учебный год')
@@ -268,6 +268,18 @@ class BellsAdmin(SafeAdmin):
     list_editable=['start_time','end_time']
 
 
+@admin.register(WeekdayBell)
+class WeekdayBellsAdmin(SafeAdmin):
+    change_list_template='admin/weekday_bells.html'
+    list_display=['day_of_week','time_slot','start_time','end_time']
+    list_filter=['day_of_week']
+    list_editable=['start_time','end_time']
+    actions=['delete_selected']
+    def has_delete_permission(self,request,obj=None):
+        # Deleting an override restores the common bell interval.
+        return request.user.is_superuser
+
+
 @admin.register(Room)
 class RoomsAdmin(SafeAdmin):
     list_display=['number','is_active']
@@ -295,7 +307,18 @@ class ImageRowForm(forms.Form):
     kind=forms.ChoiceField(choices=[('replace','Замена'),('cancel','Отмена')],label='Действие')
     subject=forms.ModelChoiceField(Subject.objects.all(),required=False,label='Дисциплина')
     teacher=forms.ModelChoiceField(Teacher.objects.all(),required=False,label='Преподаватель')
-    room=forms.ModelChoiceField(Room.objects.all(),required=False,label='Кабинет')
+    room=forms.ModelChoiceField(Room.objects.select_related('building'),required=False,label='Кабинет')
+    def __init__(self,*args,target_date=None,**kwargs):
+        super().__init__(*args,**kwargs)
+        from django.utils import timezone
+        from .curriculum import curriculum_for
+        self.target_date=target_date or timezone.localdate()
+        group_id=self.data.get(self.add_prefix('group')) if self.is_bound else self.initial.get('group')
+        group=StudentGroup.objects.filter(pk=group_id).first() if str(group_id or '').isdigit() else None
+        data=curriculum_for(group,self.target_date) if group else {'subjects':[],'teachers':[],'subgroups':[]}
+        for field,key,model in [('subject','subjects',Subject),('teacher','teachers',Teacher),('subgroup','subgroups',Subgroup)]:
+            self.fields[field].queryset=model.objects.filter(pk__in=[x['id'] for x in data[key]])
+        self.fields['subgroup'].queryset=self.fields['subgroup'].queryset.select_related('group')
     def clean(self):
         data=super().clean()
         if data.get('use'):
@@ -343,12 +366,16 @@ class ImageAdmin(SafeAdmin):
     def review(self,request,pk):
         from django.shortcuts import get_object_or_404
         from django.forms import formset_factory
-        from .image_import import publish_review
+        from .image_import import publish_review,resolve_candidates
         batch=get_object_or_404(self.get_queryset(request),pk=pk)
-        initial=[{'group':r.get('group_id'),'subgroup':r.get('subgroup_id'),'slot':r.get('slot'),'kind':r.get('kind','replace'),
-            'subject':r.get('subject_id'),'teacher':r.get('teacher_id'),'room':r.get('room_id')} for r in batch.payload]
+        initial=[]
+        for row in batch.payload:
+            suggestions=resolve_candidates(row.get('group_id'),batch.target_date,row.get('subject_text',''),row.get('teacher_text',''))
+            initial.append({'group':row.get('group_id'),'subgroup':row.get('subgroup_id'),'slot':row.get('slot'),
+                'kind':row.get('kind','replace'),'subject':suggestions['subject_id'],
+                'teacher':suggestions['teacher_id'],'room':row.get('room_id')})
         FormSet=formset_factory(ImageRowForm,extra=3,max_num=250,validate_max=True)
-        formset=FormSet(request.POST or None,initial=initial)
+        formset=FormSet(request.POST or None,initial=initial,form_kwargs={'target_date':batch.target_date})
         if request.method=='POST' and batch.status=='review':
             if request.POST.get('cancel'):
                 batch.status='cancelled';batch.save();services.audit(request.user,'cancel_image',batch)
@@ -369,5 +396,5 @@ class ImageAdmin(SafeAdmin):
                 except (ValidationError,PermissionDenied) as exc:
                     self.message_user(request,str(exc),messages.ERROR)
         previews=[r.get('group_text','')+' · '+r.get('raw','') for r in batch.payload]
-        items=[(form,previews[i] if i<len(previews) else '') for i,form in enumerate(formset)]
+        items=[(form,previews[i] if i<len(previews) else '',batch.payload[i] if i<len(batch.payload) else {}) for i,form in enumerate(formset)]
         return render(request,'admin/image_review.html',dict(self.admin_site.each_context(request),title='Проверка замен',batch=batch,formset=formset,items=items))

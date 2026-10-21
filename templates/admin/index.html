@@ -6,7 +6,7 @@
 {% block sidebar %}{% endblock %}
 {% block content %}
 <div id="content-main" class="upload-dashboard" data-status-url="{% url 'admin:upload_status' %}">
-  <header class="dashboard-heading"><div><div class="dashboard-eyebrow">РАСПИСАНИЕ И ЗАМЕНЫ</div><h1>Обновление расписания</h1><p>{% if active_year %}{{ active_year.name }}{% else %}Загрузите первый файл расписания{% endif %}</p></div><a class="dashboard-secondary" href="/">Открыть сайт ↗</a></header>
+  <header class="dashboard-heading"><div><div class="dashboard-eyebrow">РАСПИСАНИЕ И ЗАМЕНЫ</div><h1>Обновление расписания</h1><p>{% if active_year %}{{ active_year.name }} · Сейчас {{ current_week.label }}{% else %}Загрузите первый файл расписания{% endif %}</p></div><a class="dashboard-secondary" href="/">Открыть сайт ↗</a></header>
   <section class="dashboard-section" aria-labelledby="courses-heading">
     <div class="dashboard-section-head"><h2 id="courses-heading">Расписание по курсам</h2>{% if user.is_superuser %}<label class="publish-switch"><input type="checkbox" id="auto-publish" checked> Обновлять после успешной проверки</label>{% endif %}</div>
     {% if user.is_superuser %}
@@ -37,6 +37,6 @@
   <section class="dashboard-section" aria-labelledby="history-heading"><div class="dashboard-section-head"><h2 id="history-heading">Последние загрузки</h2><a href="{% url 'admin:schedule_importbatch_changelist' %}">Вся история ↗</a></div><div class="upload-history-table"><table><thead><tr><th>Файл</th><th>Дата</th><th>Статус</th><th></th></tr></thead><tbody id="upload-history">
     {% for record in upload_history %}<tr><td><span class="history-icon" aria-hidden="true">{% if record.kind == 'schedule' %}▦{% else %}⇄{% endif %}</span>{{ record.name }}</td><td>{{ record.date|date:'d.m H:i' }}</td><td><span class="history-state state-{{ record.state }}">{{ record.label }}</span></td><td><a href="{{ record.url }}">Открыть ↗</a></td></tr>{% empty %}<tr><td colspan="4" class="dashboard-muted">Загрузок пока нет</td></tr>{% endfor %}
   </tbody></table></div></section>
-  <div class="dashboard-quick-links"><a href="{% url 'admin:schedule_timeslot_changelist' %}">◷ Звонки</a><a href="/admin/conflicts/">◇ Конфликты</a>{% if user.is_superuser %}<a href="{% url 'admin:schedule_year_rollover' %}">▦ Учебные годы</a>{% endif %}<a href="{% url 'admin:schedule_change_changelist' %}">⇄ Все замены</a></div>
+  <div class="dashboard-quick-links"><a href="{% url 'admin:schedule_weekdaybell_changelist' %}">◷ Звонки по дням</a><a href="{% url 'admin:schedule_timeslot_changelist' %}">Общие звонки</a>{% if user.is_superuser and active_year %}<a href="{% url 'admin:schedule_academicyear_change' active_year.pk %}">▦ Отсчёт недель</a>{% endif %}<a href="/admin/conflicts/">◇ Конфликты</a>{% if user.is_superuser %}<a href="{% url 'admin:schedule_year_rollover' %}">Учебные годы</a>{% endif %}<a href="{% url 'admin:schedule_change_changelist' %}">⇄ Все замены</a></div>
   <details class="dashboard-directories"><summary>Справочники и настройки</summary>{% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}</details>
 </div>{% endblock %}

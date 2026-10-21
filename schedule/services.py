@@ -6,6 +6,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from .models import *
+from .timing import week_info, bell_times, slot_times
 
 
 def audit(user, action, obj, old=None, new=None):
@@ -28,9 +29,10 @@ def require_buildings(user, ids):
         raise PermissionDenied('Нет доступа к выбранным корпусам')
 
 
-def lesson_dict(lesson, date):
-    start=lesson.start_time or lesson.time_slot.start_time
-    end=lesson.end_time or lesson.time_slot.end_time
+def lesson_dict(lesson, date, times=None):
+    start,end=slot_times(lesson.time_slot,date,times)
+    start=lesson.start_time or start
+    end=lesson.end_time or end
     return {'id': lesson.pk, 'date': date.isoformat(), 'slot': lesson.time_slot.sort_order,
         'start': start.isoformat(timespec='minutes') if start else None,
         'end': end.isoformat(timespec='minutes') if end else None,
@@ -68,15 +70,11 @@ def base_schedule(date, version=None):
     if calendar and calendar.is_holiday:
         return []
     weekday = calendar.weekday_override if calendar and calendar.weekday_override is not None else date.weekday()
-    # Week parity is relative to the Monday of the academic year's first week.
-    anchor = version.period.year.start_date
-    anchor -= timedelta(days=anchor.weekday())
-    parity = 'odd' if ((date-anchor).days // 7) % 2 == 0 else 'even'
-    if calendar and calendar.week_type:
-        parity = calendar.week_type
+    parity = week_info(date,version.period.year,calendar)['type']
     lessons = version.lessons.filter(day_of_week=weekday, week_type__in=['all', parity]).select_related(
         'subject', 'teacher', 'room__building', 'time_slot').prefetch_related('participants__group', 'participants__subgroup')
-    return [lesson_dict(x, date) for x in lessons]
+    times=bell_times(date)
+    return [lesson_dict(x, date,times) for x in lessons]
 
 
 def apply_change(change, base):
@@ -93,10 +91,14 @@ def apply_change(change, base):
             result[field] = obj.number if field == 'room' else obj.name
             if field == 'room':
                 result.update(building_id=obj.building_id, building=obj.building.name)
-    if change.time_slot:
-        result.update(slot=change.time_slot.sort_order,
-            start=change.time_slot.start_time.isoformat(timespec='minutes') if change.time_slot.start_time else None,
-            end=change.time_slot.end_time.isoformat(timespec='minutes') if change.time_slot.end_time else None)
+    if change.time_slot or (change.kind=='move' and change.original_id):
+        slot=change.time_slot or change.original.time_slot
+        start,end=slot_times(slot,change.new_date if change.kind=='move' else change.target_date)
+        if not change.time_slot and change.original.start_time:
+            start,end=change.original.start_time,change.original.end_time
+        result.update(slot=slot.sort_order,time_label=slot.name,
+            start=start.isoformat(timespec='minutes') if start else None,
+            end=end.isoformat(timespec='minutes') if end else None)
     if change.start_time:
         result.update(start=change.start_time.isoformat(timespec='minutes'), end=change.end_time.isoformat(timespec='minutes'))
     if change.group:
@@ -335,10 +337,10 @@ def availability(date, start, end, rooms=None):
 
 
 def free_intervals(lessons, date, room_id=None):
-    slots = list(TimeSlot.objects.filter(start_time__isnull=False,end_time__isnull=False))
+    slots = [(a,b) for a,b in bell_times(date).values() if a and b]
     if not slots:
         return []
-    start, finish = min(x.start_time for x in slots), max(x.end_time for x in slots)
+    start, finish = min(x[0] for x in slots), max(x[1] for x in slots)
     occupied = [(time.fromisoformat(x['start']), time.fromisoformat(x['end'])) for x in lessons if live(x) and x['start'] and x['end']]
     if room_id:
         a = timezone.make_aware(datetime.combine(date, start))
@@ -348,6 +350,9 @@ def free_intervals(lessons, date, room_id=None):
                              min(finish, timezone.localtime(block.end_at).time()) if timezone.localdate(block.end_at) == date else finish))
     gaps, cursor = [], start
     for a, b in sorted(occupied):
+        a,b=max(a,start),min(b,finish)
+        if a>=b:
+            continue
         if cursor < a:
             gaps.append({'start':cursor.isoformat(timespec='minutes'), 'end':min(a,finish).isoformat(timespec='minutes')})
         cursor = max(cursor, b)
