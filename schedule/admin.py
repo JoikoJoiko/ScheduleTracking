@@ -1,12 +1,14 @@
 from django.contrib import admin, messages
 from django.core.exceptions import ValidationError, PermissionDenied
 from django.forms.models import model_to_dict
+from django.core.serializers.json import DjangoJSONEncoder
+import json
 from django.shortcuts import render, redirect
 from django.urls import path
 from django import forms
 from .models import *
 from . import services
-from .importing import preview_import, confirm_import
+from .importing import preview_import, confirm_import, import_report
 
 admin.site.site_header = 'Расписание · управление'
 admin.site.site_title = 'Расписание колледжа'
@@ -27,9 +29,11 @@ class SafeAdmin(admin.ModelAdmin):
         # Archive records instead; references and history must survive.
         return False
     def save_model(self, request, obj, form, change):
-        old = {'summary': str(type(obj).objects.get(pk=obj.pk))} if change else {}
+        def snapshot(record):
+            return json.loads(json.dumps({f.attname:getattr(record,f.attname) for f in record._meta.fields},cls=DjangoJSONEncoder))
+        old = snapshot(type(obj).objects.get(pk=obj.pk)) if change else {}
         super().save_model(request,obj,form,change)
-        services.audit(request.user,'edit' if change else 'create',obj,old,{'summary':str(obj)})
+        services.audit(request.user,'edit' if change else 'create',obj,old,snapshot(obj))
 
 
 class ScopedAdmin(SafeAdmin):
@@ -206,8 +210,9 @@ class ImportAdmin(SafeAdmin):
             except (ValidationError,PermissionDenied) as exc:
                 self.message_user(request,str(exc),messages.ERROR)
         current=services.version_on(batch.effective_from)
+        report=import_report(batch)
         return render(request,'admin/import_preview.html',dict(self.admin_site.each_context(request),batch=batch,
-            group_count=len({r['group_id'] for r in batch.payload}),current=current,title='Предварительный просмотр импорта'))
+            report=report,group_count=len({r['group_id'] for r in batch.payload}),current=current,title='Предварительный просмотр импорта'))
 
 
 @admin.register(AcademicYear)

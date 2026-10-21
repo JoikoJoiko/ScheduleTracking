@@ -1,6 +1,7 @@
 import sqlite3
 import subprocess
 import os
+from contextlib import closing
 from pathlib import Path
 from datetime import datetime
 from django.conf import settings
@@ -20,7 +21,7 @@ class Command(BaseCommand):
         suffix='.sqlite3' if 'sqlite' in db['ENGINE'] else '.dump'
         target=directory/f'schedule-{stamp}{suffix}'
         if suffix=='.sqlite3':
-            with sqlite3.connect(str(db['NAME'])) as source,sqlite3.connect(target) as backup:
+            with closing(sqlite3.connect(str(db['NAME']))) as source,closing(sqlite3.connect(target)) as backup:
                 source.backup(backup)
         else:
             env=os.environ.copy();env['PGPASSWORD']=db['PASSWORD']

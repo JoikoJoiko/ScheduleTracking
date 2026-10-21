@@ -10,7 +10,7 @@ from django.http import Http404
 from django.utils import timezone
 from .models import *
 from . import services as svc
-from .importing import preview_import, confirm_import
+from .importing import preview_import, confirm_import, import_report
 
 
 def page(request, **kwargs):
@@ -39,6 +39,13 @@ def error(code,message,status):
     return JsonResponse({'error':{'code':code,'message':message}},status=status,json_dumps_params={'ensure_ascii':False})
 
 
+def csrf_failure(request,reason=''):
+    if request.path.startswith('/api/'):
+        return error('csrf','Не удалось проверить CSRF-токен. Обновите страницу и повторите запрос.',403)
+    from django.views.csrf import csrf_failure as django_csrf_failure
+    return django_csrf_failure(request,reason=reason)
+
+
 def data_response(rows,request,**extra):
     page_number=max(1,int(request.GET.get('page',1)))
     size=max(1,min(100,int(request.GET.get('page_size',50))))
@@ -61,7 +68,11 @@ def meta(request):
     version=ScheduleVersion.objects.filter(status='published').order_by('-published_at').first()
     change=Change.objects.filter(status='published').order_by('-published_at').first()
     stamps=[x.published_at for x in [version,change] if x]
-    return JsonResponse({'today':timezone.localdate().isoformat(),'now':timezone.localtime().isoformat(),
+    last_operation=AuditLog.objects.filter(action__in=['publish_version','publish_change','withdraw_change','rollback_version','activate_year']).first()
+    if last_operation:
+        stamps.append(last_operation.created_at)
+    organization=SystemSetting.objects.filter(key='organization').values_list('value',flat=True).first() or 'Расписание колледжа'
+    return JsonResponse({'organization':organization,'today':timezone.localdate().isoformat(),'now':timezone.localtime().isoformat(),
         'updated_at':max(stamps).isoformat() if stamps else None,
         'buildings':list(Building.objects.values('id','name')),
         'room_types':list(RoomType.objects.values('id','name')),
@@ -165,12 +176,17 @@ def room_availability(request):
         rooms=rooms.filter(capacity__gte=int(request.GET['capacity']))
     if request.GET.get('q'):
         rooms=[r for r in rooms if matches(r.number+' '+r.building.name,request.GET['q'])]
+    rooms=list(rooms)
     rows=svc.availability(day,start,end,rooms)
     if request.GET.get('status'):
         rows=[r for r in rows if r['status']==request.GET['status']]
     if request.GET.get('grid')=='1':
+        grid={room.pk:[] for room in rooms}
+        for slot in TimeSlot.objects.all():
+            for entry in svc.availability(day,slot.start_time,slot.end_time,rooms):
+                grid[entry['id']].append({'slot':slot.sort_order,'status':entry['status']})
         for row in rows:
-            row['grid']=[{'slot':slot.sort_order,'status':svc.availability(day,slot.start_time,slot.end_time,[Room.objects.select_related('building','room_type').get(pk=row['id'])])[0]['status']} for slot in TimeSlot.objects.all()]
+            row['grid']=grid[row['id']]
     return data_response(rows,request,date=day.isoformat(),start=start.isoformat(timespec='minutes'),end=end.isoformat(timespec='minutes'))
 
 
@@ -229,7 +245,7 @@ def admin_imports(request,pk=None,action=None):
         return JsonResponse({'version_id':version.pk,'status':'published'})
     if request.method!='GET':
         return error('method','Используйте GET',405)
-    return JsonResponse({'id':batch.pk,'status':batch.status,'payload':batch.payload,'errors':batch.errors,'version_id':batch.version_id})
+    return JsonResponse({'id':batch.pk,'status':batch.status,'payload':batch.payload,'errors':batch.errors,'version_id':batch.version_id,'report':import_report(batch)})
 
 
 @api

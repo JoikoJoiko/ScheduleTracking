@@ -3,6 +3,8 @@
 <p>Новая полная версия на {{ batch.effective_from }} — {{ batch.effective_to }}. Текущая версия: {{ current|default:'нет' }}.</p>
 <p>Справочники автоматически не создаются: неизвестные значения требуют ручной проверки. При публикации будет выполнена проверка всех дат периода; ошибка отменит операцию целиком.</p>
 {% for error in batch.errors %}<p class="errornote">{{ error }}</p>{% endfor %}
-<details><summary>Распознанные записи (идентификаторы справочников)</summary><pre style="white-space:pre-wrap">{{ batch.payload|pprint }}</pre></details>
-<form method="post">{% csrf_token %}{% if not batch.errors and batch.status == 'preview' %}<input type="submit" value="Подтвердить и опубликовать">{% endif %}
+<p>Занятий в прежней версии: {{ report.previous_count }}. Строк в новой: {{ report.new_count }}. Групп: {{ group_count }}. Новых справочников: 0.</p>
+{% for conflict in report.conflicts %}<p class="errornote">{{ conflict.date }} · {{ conflict.type }} · {{ conflict.lesson.subject }} · {{ conflict.lesson.room }}</p>{% endfor %}
+<table><thead><tr><th>День (0–6)</th><th>Группа</th><th>Подгруппа</th><th>Дисциплина</th><th>Преподаватель</th><th>Аудитория</th><th>Неделя</th></tr></thead><tbody>{% for row in report.rows %}<tr><td>{{ row.day_of_week }}</td><td>{{ row.group }}</td><td>{{ row.subgroup }}</td><td>{{ row.subject }}</td><td>{{ row.teacher }}</td><td>{{ row.room }}</td><td>{{ row.week_type }}</td></tr>{% endfor %}</tbody></table>
+<form method="post">{% csrf_token %}{% if not batch.errors and not report.conflicts and batch.status == 'preview' %}<input type="submit" value="Подтвердить и опубликовать">{% endif %}
 {% if batch.status == 'preview' %}<button name="cancel" value="1">Отменить импорт</button>{% endif %}</form>{% endblock %}

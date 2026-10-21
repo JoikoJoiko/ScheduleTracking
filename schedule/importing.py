@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 from .models import *
-from .services import audit, require_buildings, publish_version, lock_schedule
+from .services import audit, require_buildings, publish_version, lock_schedule, candidate_dates, conflicts_for, schedule_on, version_on
 
 FIELDS = ['day', 'slot', 'group', 'subgroup', 'subject', 'teacher', 'building', 'room', 'week', 'type', 'start', 'end']
 HEADERS = dict(zip(FIELDS, ['День', 'Пара', 'Группа', 'Подгруппа', 'Дисциплина', 'Преподаватель', 'Корпус', 'Аудитория', 'Неделя', 'Тип', 'Начало', 'Окончание']))
@@ -153,9 +153,20 @@ def confirm_import(batch, user):
         raise ValidationError(f'Этот файл уже опубликован (импорт №{prior.pk})')
     version = ScheduleVersion.objects.create(name=f'Импорт {batch.filename}',period=batch.period,
         effective_from=batch.effective_from,effective_to=batch.effective_to)
+    populate_version(version,batch.payload)
+    publish_version(version,user)
+    batch.version = version
+    batch.status = 'confirmed'
+    batch.completed_at = timezone.now()
+    batch.save()
+    audit(user,'confirm_import',batch,new={'version':version.pk})
+    return version
+
+
+def populate_version(version,payload):
     # Identical resource rows represent one joint lesson, not a false room conflict.
     joint = {}
-    for raw in batch.payload:
+    for raw in payload:
         row = dict(raw)
         group, subgroup = row.pop('group_id'), row.pop('subgroup_id')
         for key in ['start_time','end_time']:
@@ -166,10 +177,28 @@ def confirm_import(batch, user):
             lesson = Lesson.objects.create(version=version, **row)
             joint[key] = lesson
         Participant.objects.create(lesson=lesson, group_id=group, subgroup_id=subgroup)
-    publish_version(version,user)
-    batch.version = version
-    batch.status = 'confirmed'
-    batch.completed_at = timezone.now()
-    batch.save()
-    audit(user,'confirm_import',batch,new={'version':version.pk})
-    return version
+
+
+def import_report(batch):
+    """Use a rollback-only transaction so previews share real publication rules."""
+    names={model.__name__:{x.pk:str(x) for x in model.objects.all()} for model in [StudentGroup,Subject,Teacher,Room,Subgroup]}
+    rows=[]
+    for row in batch.payload:
+        rows.append({**row,'group':names['StudentGroup'].get(row['group_id']), 'subject':names['Subject'].get(row['subject_id']),
+            'teacher':names['Teacher'].get(row['teacher_id']), 'room':names['Room'].get(row['room_id']),
+            'subgroup':names['Subgroup'].get(row['subgroup_id'],'')})
+    current=version_on(batch.effective_from)
+    report={'rows':rows,'conflicts':[],'previous_count':current.lessons.count() if current else 0,
+            'new_count':len(rows),'current':str(current) if current else None}
+    if batch.errors or batch.status!='preview':
+        return report
+    with transaction.atomic():
+        version=ScheduleVersion.objects.create(name='Предпросмотр',period=batch.period,
+            effective_from=batch.effective_from,effective_to=batch.effective_to)
+        populate_version(version,batch.payload)
+        for day in candidate_dates(version):
+            report['conflicts'].extend(conflicts_for(day,schedule_on(day,version=version)))
+            if len(report['conflicts'])>=100:
+                break
+        transaction.set_rollback(True)
+    return report

@@ -58,3 +58,5 @@ document.addEventListener('submit',event=>{if(event.target.id==='search-form'){e
 document.addEventListener('change',event=>{const el=event.target;if(el.matches('[data-filter]'))update({[el.name]:el.type==='checkbox'?(el.checked?'1':null):el.value,page:null,...(el.name==='start'||el.name==='end'?{slot:null}:{})});});
 document.addEventListener('input',event=>{if(event.target.id==='search'){clearTimeout(searchTimer);const value=event.target.value;searchTimer=setTimeout(()=>{const pos=event.target.selectionStart;update({q:value,page:null});setTimeout(()=>{const input=document.querySelector('#search');if(input){input.focus();try{input.setSelectionRange(pos,pos);}catch{}}},0);},350);}});
 window.addEventListener('popstate',render);render();
+// Refresh current lesson markers without interrupting a search or filter edit.
+setInterval(async()=>{if(document.hidden||document.activeElement?.matches('input,select'))return;try{meta=await get('/api/meta');render();}catch{/* Keep the last successful view during a temporary network failure. */}},60000);

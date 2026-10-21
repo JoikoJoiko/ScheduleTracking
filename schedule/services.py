@@ -226,13 +226,21 @@ def publish_change(change, user):
         return
     change.full_clean()
     require_buildings(user, change_buildings(change))
+    if change.group_id:
+        require_buildings(user, [change.group.building_id])
     if change.original_id and not any(x['id'] == change.original_id for x in base_schedule(change.target_date)):
         raise ValidationError('Исходного занятия нет в актуальном расписании на эту дату')
     dates = {change.target_date, change.new_date or change.target_date}
     if change.original_id and change.new_date and not change.original.version.period.year.start_date <= change.new_date <= change.original.version.period.year.end_date:
         raise ValidationError('Перенос должен находиться в том же учебном году')
     for date in dates:
-        errors = conflicts_for(date, schedule_on(date, preview=change))
+        proposed = schedule_on(date, preview=change)
+        for lesson in proposed:
+            if lesson['change_id'] == change.pk and live(lesson):
+                year = AcademicYear.objects.filter(start_date__lte=date,end_date__gte=date).first()
+                if not year or any(not GroupYear.objects.filter(year=year,group_id=g['id'],status='active').exists() for g in lesson['groups']):
+                    raise ValidationError('Группа не активна в выбранном учебном году')
+        errors = conflicts_for(date, proposed)
         if errors:
             raise ValidationError(f'{date}: {errors[0]["type"]}. Публикация заблокирована.')
     change.status = 'published'
@@ -313,9 +321,10 @@ def free_intervals(lessons, date, room_id=None):
 def rollover_preview(source, target):
     rows = []
     for membership in GroupYear.objects.filter(year=source).select_related('group'):
-        graduated = membership.group.graduation_year <= target.start_date.year
+        graduated = membership.status == 'active' and membership.group.graduation_year <= target.start_date.year
         rows.append({'group_id':membership.group_id, 'name':membership.group.name,
-            'course':membership.course+1, 'status':'graduated' if graduated else membership.status})
+            'course':membership.course+1 if membership.status == 'active' and not graduated else membership.course,
+            'status':'graduated' if graduated else membership.status})
     return rows
 
 
