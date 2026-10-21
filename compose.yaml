@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: schedule
+      POSTGRES_USER: schedule
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U schedule -d schedule"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DEBUG: "0"
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}
+      DATABASE_URL: postgresql://schedule:${POSTGRES_PASSWORD}@db:5432/schedule
+      ALLOWED_HOSTS: ${DOMAIN:?Set DOMAIN}
+      CSRF_TRUSTED_ORIGINS: https://${DOMAIN}
+      TRUST_PROXY: "1"
+      TIME_ZONE: Europe/Moscow
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - static:/app/staticfiles
+      - backups:/app/backups
+  web:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    depends_on:
+      - app
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - static:/srv/static:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  database:
+  static:
+  backups:
+  caddy_data:
+  caddy_config:

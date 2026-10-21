@@ -1,0 +1,14 @@
+{$DOMAIN} {
+    encode zstd gzip
+    handle /static/* {
+        root * /srv
+        file_server
+    }
+    handle {
+        reverse_proxy app:8000
+    }
+    header {
+        Referrer-Policy strict-origin-when-cross-origin
+        X-Content-Type-Options nosniff
+    }
+}

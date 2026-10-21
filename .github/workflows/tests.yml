@@ -1,0 +1,21 @@
+name: Tests
+on: [push, pull_request]
+jobs:
+  django:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: pip install -r requirements.txt
+      - run: python manage.py check
+      - run: python manage.py makemigrations --check --dry-run
+      - run: python manage.py test
+      - run: node --check static/app.js
