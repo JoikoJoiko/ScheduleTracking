@@ -30,6 +30,7 @@ services:
     volumes:
       - static:/app/staticfiles
       - backups:/app/backups
+      - media:/app/media
   web:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -49,5 +50,6 @@ volumes:
   database:
   static:
   backups:
+  media:
   caddy_data:
   caddy_config:
