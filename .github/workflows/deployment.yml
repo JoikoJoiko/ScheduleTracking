@@ -3,22 +3,52 @@ on: [push, pull_request]
 jobs:
   nginx:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - scheme: https
+            host: schedule.example.test
+          - scheme: http
+            host: 185.171.83.215
+    env:
+      TEST_SCHEME: ${{ matrix.scheme }}
+      TEST_HOST: ${{ matrix.host }}
     steps:
       - uses: actions/checkout@v4
-      - run: python3 deploy/prepare.py schedule.example.test
+      - run: python3 deploy/prepare.py "$TEST_HOST" --scheme "$TEST_SCHEME"
       - name: Validate and start the Nginx deployment
         run: |
           docker compose --env-file .env.nginx -f compose.nginx.yaml config --quiet
+          docker compose --env-file .env.nginx -f compose.nginx.yaml config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin)["services"]; assert not c["db"].get("ports"); assert not c["app"].get("ports"); assert c["app"]["environment"]["DEBUG"]=="0"; assert c["web"]["ports"][0]["host_ip"]=="127.0.0.1"; assert c["web"]["ports"][0]["published"]=="8080"'
           bash deploy/server.sh up
-      - name: Check HTTPS proxy, static files, uploads and OCR runtime
+      - name: Check proxy, static files, uploads and OCR runtime
         run: |
           docker compose --env-file .env.nginx -f compose.nginx.yaml exec -T web nginx -t
-          curl -fsS -H 'Host: schedule.example.test' -H 'X-Forwarded-Proto: https' http://127.0.0.1:8080/healthz | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"]=="ok"'
-          curl -fsS -H 'Host: schedule.example.test' -H 'X-Forwarded-Proto: https' http://127.0.0.1:8080/api/meta > /dev/null
+          curl -fsS -H "Host: $TEST_HOST" -H "X-Forwarded-Proto: $TEST_SCHEME" http://127.0.0.1:8080/healthz | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"]=="ok"'
+          curl -fsS -H "Host: $TEST_HOST" -H "X-Forwarded-Proto: $TEST_SCHEME" http://127.0.0.1:8080/api/meta > /dev/null
           curl -fsS http://127.0.0.1:8080/static/app.js > /dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/media/private.png)" = 404
           docker compose --env-file .env.nginx -f compose.nginx.yaml exec -T app tesseract --list-langs | grep -Fx rus
           bash deploy/server.sh manage check --deploy --fail-level WARNING
+      - name: Validate generated host Nginx on HTTP port 5555 and enforce CSRF
+        if: matrix.scheme == 'http'
+        run: |
+          docker run --rm --network host -v "$PWD/deploy/generated/nginx.conf:/etc/nginx/conf.d/default.conf:ro" nginx:stable-alpine nginx -t
+          docker run -d --name schedule-front --network host -v "$PWD/deploy/generated/nginx.conf:/etc/nginx/conf.d/default.conf:ro" nginx:stable-alpine
+          for attempt in $(seq 1 20); do
+            if curl -fsS -H "Host: $TEST_HOST:5555" http://127.0.0.1:5555/healthz; then break; fi
+            sleep 1
+          done
+          for path in /healthz /api/meta /static/app.js /admin/login/; do
+            curl -fsS -H "Host: $TEST_HOST:5555" "http://127.0.0.1:5555$path" > /dev/null
+          done
+          curl -fsS -c /tmp/schedule-cookies -H "Host: $TEST_HOST:5555" http://127.0.0.1:5555/admin/login/ > /dev/null
+          csrf=$(awk '$6=="schedule_csrftoken" {print $7}' /tmp/schedule-cookies)
+          test -n "$csrf"
+          login=(curl -s -o /dev/null -w '%{http_code}' -b /tmp/schedule-cookies -H "Host: $TEST_HOST:5555" --data 'username=missing-test-user&password=test-fixture-password')
+          test "$("${login[@]}" -H "Origin: http://$TEST_HOST:5555" http://127.0.0.1:5555/admin/login/)" = 403
+          test "$("${login[@]}" --data-urlencode "csrfmiddlewaretoken=$csrf" -H "Origin: http://$TEST_HOST:4444" http://127.0.0.1:5555/admin/login/)" = 403
+          test "$("${login[@]}" --data-urlencode "csrfmiddlewaretoken=$csrf" -H "Origin: http://$TEST_HOST:5555" http://127.0.0.1:5555/admin/login/)" = 200
       - name: Verify consistent backup and service restart
         run: |
           bash deploy/server.sh backup
@@ -29,4 +59,6 @@ jobs:
         run: docker compose --env-file .env.nginx -f compose.nginx.yaml logs --tail=100
       - name: Clean up test containers
         if: always()
-        run: docker compose --env-file .env.nginx -f compose.nginx.yaml down -v
+        run: |
+          docker rm -f schedule-front >/dev/null 2>&1 || true
+          docker compose --env-file .env.nginx -f compose.nginx.yaml down -v

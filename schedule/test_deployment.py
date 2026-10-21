@@ -77,6 +77,7 @@ set -eu
 printf '%s\\n' "$*" >> "$DEPLOY_TEST_LOG"
 case "$*" in
   "compose version") exit 0 ;;
+  *" start --wait"*) echo 'unknown flag: --wait' >&2; exit 1 ;;
   *" ps --status running --services") printf 'app\\nweb\\ndb\\n' ;;
   *" build app") [[ "${DEPLOY_TEST_FAIL:-}" != build ]] || exit 21 ;;
   *"pg_dump"*) [[ "${DEPLOY_TEST_FAIL:-}" != dump ]] || exit 22; printf 'test database dump' ;;
@@ -108,12 +109,12 @@ esac
         self.assertTrue((target/'database.dump').stat().st_size)
         self.assertTrue((target/'media.tar.gz').stat().st_size)
         self.assertIn('stop web app',calls)
-        self.assertIn('start --wait --wait-timeout 240 app web',calls)
+        self.assertIn('up -d --no-recreate --wait --wait-timeout 240 app web',calls)
 
     def test_failed_backup_resumes_services_without_a_complete_marker(self):
         result,calls=self.run_script('backup','dump')
         self.assertNotEqual(result.returncode,0)
-        self.assertIn('start --wait --wait-timeout 240 app web',calls)
+        self.assertIn('up -d --no-recreate --wait --wait-timeout 240 app web',calls)
         self.assertEqual(list((self.root/'backups').rglob('COMPLETE')),[])
 
     def test_failed_update_build_keeps_running_site_available(self):
@@ -125,8 +126,8 @@ esac
     def test_failed_update_backup_does_not_apply_migrations(self):
         result,calls=self.run_script('update','dump')
         self.assertNotEqual(result.returncode,0)
-        self.assertIn('start --wait --wait-timeout 240 app web',calls)
-        self.assertNotIn(' up ',calls)
+        self.assertIn('up -d --no-recreate --wait --wait-timeout 240 app web',calls)
+        self.assertNotIn('up -d --wait',calls)
 
 
 class HealthTests(TestCase):

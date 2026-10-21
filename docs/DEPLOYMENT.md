@@ -2,6 +2,8 @@
 
 **Свой Nginx:** используйте [готовый комплект установки](../INSTALL-NGINX.md) и `compose.nginx.yaml`. Он слушает только localhost:8080, сохраняет действующий Nginx/HTTPS сервера и имеет команды `up`, `update`, `backup`, `admin`. Описанный ниже исходный `compose.yaml` — отдельный вариант с Caddy, которому нужны свободные 80/443; одновременно запускать оба варианта не требуется.
 
+Для Debian 13 без домена есть явный тестовый режим: `python3 deploy/prepare.py 185.171.83.215 --scheme http --public-port 5555 --port 8080`, затем `sudo bash deploy/server.sh up`. Отдельный внешний vhost слушает 5555. Полные команды, ограничения HTTP и установка без изменения чужих vhost приведены в `INSTALL-NGINX.md`.
+
 ## Локально
 
 Достаточно Python, виртуального окружения и SQLite; команды находятся в README. Сервер по умолчанию слушает только `127.0.0.1:8000`. База, локальный ключ и резервные копии исключены из Git. Перед передачей проекта выполните миграции на целевой машине.
@@ -14,12 +16,16 @@
 |---|---|
 | DEBUG | `1` локально (по умолчанию), `0` на сервере |
 | SECRET_KEY | Обязательный случайный секрет при DEBUG=0; локально генерируется `.secret_key` |
-| ALLOWED_HOSTS | Домены через запятую, без схемы |
-| CSRF_TRUSTED_ORIGINS | Адреса с https, через запятую |
+| ALLOWED_HOSTS | DNS-имена или IP через запятую, без схемы и порта |
+| CSRF_TRUSTED_ORIGINS | Полные доверенные origins со схемой и нестандартным портом, через запятую |
+| DEPLOY_SCHEME | `https` по умолчанию; `http` — явный режим тестирования без TLS при DEBUG=0 |
 | DATABASE_URL | PostgreSQL URI; без него SQLite |
 | TIME_ZONE | По умолчанию Europe/Moscow |
 | TRUST_PROXY | `1` только за доверенным прокси, который перезаписывает X-Forwarded-Proto |
-| DOMAIN | Docker/Caddy: публичный домен |
+| DOMAIN | Nginx-комплект: DNS-имя или IPv4; исходный Caddy-комплект: домен HTTPS |
+| PUBLIC_ORIGIN | Nginx-комплект: внешний origin, например `http://185.171.83.215:5555` |
+| PUBLIC_PORT | Порт внешнего сайта: 5555 в тестовом HTTP, 443 в HTTPS |
+| HOST_PORT | Локальный порт Docker gateway, по умолчанию 8080; привязка только к 127.0.0.1 |
 | POSTGRES_PASSWORD | Docker: пароль PostgreSQL |
 
 Не храните реальные секреты в репозитории. Для `SECRET_KEY` используйте `python -c "import secrets; print(secrets.token_urlsafe(64))"`. Пароль в DATABASE_URL должен быть URL-кодирован; в предоставленном Compose используйте случайные буквы и цифры без URI-разделителей.

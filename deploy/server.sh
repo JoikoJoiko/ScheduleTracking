@@ -26,7 +26,8 @@ backup() (
     compose exec -T db pg_isready -U schedule -d schedule >/dev/null
     target="$PROJECT_ROOT/backups/server/$(date -u +%Y%m%dT%H%M%SZ)-$$"
     mkdir -p -- "$target"
-    trap 'backup_status=$?; if ((${#running[@]})); then if ! compose start --wait --wait-timeout 240 "${running[@]}"; then backup_status=1; fi; fi; exit "$backup_status"' EXIT
+    # Older Compose v2 supports --wait on up, but not on start; keep existing containers.
+    trap 'backup_status=$?; if ((${#running[@]})); then if ! compose up -d --no-recreate --wait --wait-timeout 240 "${running[@]}"; then backup_status=1; fi; fi; exit "$backup_status"' EXIT
     compose stop web app
     compose exec -T db pg_dump -U schedule -d schedule -Fc > "$target/database.dump"
     compose run --rm --no-deps --entrypoint tar app -C /app/media -czf - . > "$target/media.tar.gz"
@@ -42,7 +43,7 @@ case "${1:-help}" in
     up)
         compose up -d --build --wait --wait-timeout 240
         compose exec -T app python manage.py check --deploy --fail-level WARNING
-        echo 'Ready. Connect your HTTPS Nginx site using deploy/generated/nginx.conf or location.conf.'
+        echo 'Ready. Connect your Nginx site using deploy/generated/nginx.conf or location.conf.'
         ;;
     update)
         # Build first so a build failure does not interrupt the running site.

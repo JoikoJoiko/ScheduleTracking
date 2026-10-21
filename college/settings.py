@@ -1,9 +1,13 @@
 import os
 from pathlib import Path
 from urllib.parse import urlparse, unquote
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEBUG = os.getenv('DEBUG', '1') == '1'
+DEPLOY_SCHEME = os.getenv('DEPLOY_SCHEME', 'https')
+if DEPLOY_SCHEME not in ('http', 'https'):
+    raise ImproperlyConfigured('DEPLOY_SCHEME must be http or https')
 SECRET_KEY = os.getenv('SECRET_KEY', '')
 if not SECRET_KEY:
     if not DEBUG:
@@ -54,12 +58,18 @@ SILENCED_SYSTEM_CHECKS = ['security.W021']
 CSRF_FAILURE_VIEW = 'schedule.views.csrf_failure'
 if os.getenv('TRUST_PROXY', '0') == '1':
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-if not DEBUG:
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
-    SECURE_SSL_REDIRECT = True
-    SECURE_HSTS_SECONDS = 31536000
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SESSION_COOKIE_SECURE = not DEBUG and DEPLOY_SCHEME == 'https'
+CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
+SECURE_SSL_REDIRECT = SESSION_COOKIE_SECURE
+SECURE_HSTS_SECONDS = 31536000 if SESSION_COOKIE_SECURE else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = SESSION_COOKIE_SECURE
+if not DEBUG and DEPLOY_SCHEME == 'http':
+    # Explicit test transport: suppress only checks requiring TLS, never CSRF checks.
+    SILENCED_SYSTEM_CHECKS += ['security.W004', 'security.W008', 'security.W012', 'security.W016']
+    # Cookies are not isolated by port; avoid collisions with other apps on this IP.
+    SESSION_COOKIE_NAME = 'schedule_sessionid'
+    CSRF_COOKIE_NAME = 'schedule_csrftoken'
+    SECURE_CROSS_ORIGIN_OPENER_POLICY = None
 CSRF_TRUSTED_ORIGINS = [x for x in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if x]
 LOGGING = {'version': 1, 'disable_existing_loggers': False, 'handlers': {'console': {'class': 'logging.StreamHandler'}},
            'root': {'handlers': ['console'], 'level': 'INFO'}}
