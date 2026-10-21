@@ -1,0 +1,3 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+{% block content %}<div id="content-main"><p><a href="/">Открыть сайт</a> · <a href="/admin/schedule/importbatch/upload/">Импорт XLSX</a> · <a href="/admin/conflicts/">Проверка конфликтов</a>{% if user.is_superuser %} · <a href="/admin/schedule/academicyear/rollover/">Новый учебный год</a>{% endif %}</p>{% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}</div>{% endblock %}

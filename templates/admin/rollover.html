@@ -1,0 +1,5 @@
+{% extends "admin/base_site.html" %}
+{% block content %}<form method="get"><label>Исходный год <select name="source">{% for year in years %}<option value="{{ year.pk }}">{{ year }}</option>{% endfor %}</select></label>
+<label>Новый год <select name="target">{% for year in years %}<option value="{{ year.pk }}">{{ year }}</option>{% endfor %}</select></label><button>Предварительный просмотр</button></form>
+{% if rows %}<h2>{{ source }} → {{ target }}</h2><table><tr><th>Группа</th><th>Новый курс</th><th>Статус</th></tr>{% for row in rows %}<tr><td>{{ row.name }}</td><td>{{ row.course }}</td><td>{{ row.status }}</td></tr>{% endfor %}</table>
+<form method="post">{% csrf_token %}<input type="hidden" name="source" value="{{ source.pk }}"><input type="hidden" name="target" value="{{ target.pk }}"><input type="submit" value="Подтвердить перевод"></form>{% endif %}{% endblock %}

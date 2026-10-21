@@ -1,0 +1,8 @@
+{% extends "admin/base_site.html" %}
+{% block content %}<p><strong>{{ batch.filename }}</strong> · {{ batch.payload|length }} строк · {{ group_count }} групп · статус: {{ batch.status }}</p>
+<p>Новая полная версия на {{ batch.effective_from }} — {{ batch.effective_to }}. Текущая версия: {{ current|default:'нет' }}.</p>
+<p>Справочники автоматически не создаются: неизвестные значения требуют ручной проверки. При публикации будет выполнена проверка всех дат периода; ошибка отменит операцию целиком.</p>
+{% for error in batch.errors %}<p class="errornote">{{ error }}</p>{% endfor %}
+<details><summary>Распознанные записи (идентификаторы справочников)</summary><pre style="white-space:pre-wrap">{{ batch.payload|pprint }}</pre></details>
+<form method="post">{% csrf_token %}{% if not batch.errors and batch.status == 'preview' %}<input type="submit" value="Подтвердить и опубликовать">{% endif %}
+{% if batch.status == 'preview' %}<button name="cancel" value="1">Отменить импорт</button>{% endif %}</form>{% endblock %}
