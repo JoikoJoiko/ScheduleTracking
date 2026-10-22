@@ -282,7 +282,7 @@ class WeekdayBellsAdmin(SafeAdmin):
 
 @admin.register(ShortenedDay)
 class ShortenedDayAdmin(SafeAdmin):
-    list_display=['date','lesson_minutes','start_time','is_active']
+    list_display=['date','lesson_count','lesson_minutes','start_time','is_active']
     list_filter=['is_active']
 
 

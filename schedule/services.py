@@ -6,7 +6,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from .models import *
-from .timing import week_info, bell_times, slot_times
+from .timing import week_info, bell_times, slot_times,lesson_limit,require_teaching_slot
 
 
 def audit(user, action, obj, old=None, new=None):
@@ -188,8 +188,11 @@ def schedule_on(date, preview=None, version=None, omit_change=None):
             lessons.append(changed)
     # Off-site practice suppresses only its group, preserving joint lessons for others.
     away=set(PracticePeriod.objects.filter(is_active=True,start_date__lte=date,end_date__gte=date).values_list('group_id',flat=True))
+    limit=lesson_limit(date)
     result=[]
     for lesson in lessons:
+        if limit is not None and lesson['slot']>limit:
+            continue
         lesson['groups']=[g for g in lesson['groups'] if g['id'] not in away]
         if lesson['groups']:
             result.append(lesson)
@@ -304,6 +307,9 @@ def publish_change(change, user):
     for day in dates:
         if PracticePeriod.objects.filter(group_id__in=group_ids,is_active=True,start_date__lte=day,end_date__gte=day).exists():
             raise ValidationError('На эту дату у группы назначена практика')
+    slot=change.time_slot or (change.original.time_slot if change.original_id else None)
+    if slot:
+        require_teaching_slot(change.new_date or change.target_date,slot.sort_order)
     if change.original_id and change.new_date and not change.original.version.period.year.start_date <= change.new_date <= change.original.version.period.year.end_date:
         raise ValidationError('Перенос должен находиться в том же учебном году')
     for date in dates:

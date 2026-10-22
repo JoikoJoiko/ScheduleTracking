@@ -4,6 +4,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const source=fs.readFileSync('static/app.js','utf8');
+const {calculateShortDay}=require('../static/short-day.js');
 
 function page() {
     const events={},requests=[],history=[],intervals=[];
@@ -61,4 +62,38 @@ test('practice and subgroup cards carry their own visible labels',()=>{
     assert.match(practice,/Практика до 26\.10\.2026/);assert.doesNotMatch(practice,/Занятий нет/);
     const subgroup=vm.runInContext("lessonCard({date:'2026-10-19',status:'regular',slot:1,subject:'Базы данных',groups:[{id:1,name:'ИС-1-23',subgroup:'2'}]})",p.context);
     assert.match(subgroup,/subgroup-lesson/);assert.match(subgroup,/Подгруппа 2/);
+});
+
+const shortScheme=()=>({lessonCount:3,lessonMinutes:40,start:'08:00',keepBreaks:true,breakMinutes:'',
+    regular:[{number:1,start:'08:00',end:'09:30'},{number:2,start:'09:40',end:'11:10'},{number:3,start:'11:40',end:'13:10'}],
+    rows:[{number:1,lessonMinutes:'',breakMinutes:5},{number:2,lessonMinutes:'',breakMinutes:25},
+          {number:3,lessonMinutes:30,breakMinutes:''}]});
+
+test('short day preview respects count, per-pair duration and individual long break',()=>{
+    const config=shortScheme(),preview=calculateShortDay(config);
+    assert.deepEqual(preview.map(row=>[row.start,row.end]),[['08:00','08:40'],['08:45','09:25'],['09:50','10:20']]);
+    config.lessonCount=2;
+    assert.equal(calculateShortDay(config).length,2);
+    assert.equal(calculateShortDay(config)[1].breakAfter,0);
+});
+
+test('zero-minute breaks and ordinary weekday breaks remain distinct',()=>{
+    const config=shortScheme();config.rows[0].breakMinutes=0;config.rows[1].breakMinutes='';
+    const rows=calculateShortDay(config);
+    assert.equal(rows[1].start,'08:40');assert.equal(rows[2].start,'09:50');
+    config.keepBreaks=false;config.breakMinutes=15;
+    assert.equal(calculateShortDay(config)[2].start,'09:35');
+});
+
+test('short day preview rejects invalid parameters and midnight overflow',()=>{
+    for(const patch of [{start:'23:30'},{lessonCount:8},{lessonCount:0},{lessonMinutes:0},{lessonMinutes:''}])
+        assert.throws(()=>calculateShortDay({...shortScheme(),...patch}));
+    const config=shortScheme();config.rows[0].breakMinutes=720;config.start='20:00';
+    assert.throws(()=>calculateShortDay(config),/тот же день/);
+});
+
+test('public short-day caption uses the complete schedule label',()=>{
+    const p=page();
+    const html=vm.runInContext("dayPanel({date:'2026-10-19',has_data:true,lessons:[],shortened_day:{label:'Сокращённый день · 4 пары по 40 мин'}})",p.context);
+    assert.match(html,/4 пары по 40 мин/);
 });

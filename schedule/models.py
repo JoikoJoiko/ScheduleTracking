@@ -173,6 +173,7 @@ class WeekdayBell(models.Model):
 
 class ShortenedDay(models.Model):
     date = models.DateField('Дата', unique=True)
+    lesson_count = models.PositiveSmallIntegerField('Количество пар',null=True,blank=True,validators=[MinValueValidator(1),MaxValueValidator(7)])
     lesson_minutes = models.PositiveSmallIntegerField('Длительность пары, минут', validators=[MinValueValidator(1), MaxValueValidator(180)])
     start_time = models.TimeField('Начало первой пары', null=True, blank=True)
     keep_breaks = models.BooleanField('Сохранить обычные перемены', default=True)
@@ -186,13 +187,30 @@ class ShortenedDay(models.Model):
             raise ValidationError({'date':'Выберите учебный день с понедельника по субботу'})
         if self.date and self.lesson_minutes:
             from .timing import shortened_times, regular_bell_times
-            shortened_times(self.date,regular_bell_times(self.date),self)
+            shortened_times(self.date,regular_bell_times(self.date),self,getattr(self,'_pending_bells',None))
     def __str__(self):
         return f'{self.date:%d.%m.%Y} · {self.lesson_minutes} мин'
     class Meta:
         ordering=['date']
         verbose_name='Сокращённый день'
         verbose_name_plural='Сокращённые дни'
+
+
+class ShortenedBell(models.Model):
+    shortened_day = models.ForeignKey(ShortenedDay,on_delete=models.CASCADE,related_name='bells',verbose_name='Сокращённый день')
+    time_slot = models.ForeignKey(TimeSlot,on_delete=models.PROTECT,verbose_name='Пара')
+    lesson_minutes = models.PositiveSmallIntegerField('Длительность пары, минут',null=True,blank=True,validators=[MinValueValidator(1),MaxValueValidator(180)])
+    break_minutes = models.PositiveSmallIntegerField('Перемена после, минут',null=True,blank=True,validators=[MaxValueValidator(720)])
+    def clean(self):
+        if self.time_slot_id and self.time_slot.sort_order not in range(1,8):
+            raise ValidationError('Настройки доступны для пар с первой по седьмую')
+    def __str__(self):
+        return f'{self.shortened_day} · {self.time_slot}'
+    class Meta:
+        ordering=['time_slot__sort_order']
+        constraints=[models.UniqueConstraint(fields=['shortened_day','time_slot'],name='shortened_bell_unique')]
+        verbose_name='Пара сокращённого дня'
+        verbose_name_plural='Пары сокращённого дня'
 
 
 class PracticePeriod(models.Model):

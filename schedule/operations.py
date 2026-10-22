@@ -1,12 +1,14 @@
 """Daily work screens; low-level model editing stays in the advanced area."""
+from datetime import timedelta
 from django import forms
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.forms import formset_factory,BaseFormSet
+from django.forms.models import model_to_dict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-from .models import TimeSlot, WeekdayBell, ShortenedDay, PracticePeriod, StudentGroup, WEEKDAYS
+from .models import TimeSlot, WeekdayBell, ShortenedDay,ShortenedBell, PracticePeriod, WEEKDAYS
 from . import services
 from .timing import regular_bell_times, shortened_times
 
@@ -26,9 +28,35 @@ class BellRowForm(forms.Form):
 class ShortDayForm(forms.ModelForm):
     class Meta:
         model=ShortenedDay
-        fields=['date','lesson_minutes','start_time','keep_breaks','break_minutes','note','is_active']
+        fields=['date','lesson_count','lesson_minutes','start_time','keep_breaks','break_minutes','note','is_active']
         widgets={'date':forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'}),
                  'start_time':forms.TimeInput(format='%H:%M',attrs={'type':'time'}),'note':forms.TextInput()}
+        labels={'lesson_minutes':'Длительность пары по умолчанию, мин',
+                'keep_breaks':'Обычные перемены по умолчанию','break_minutes':'Перемена по умолчанию, мин'}
+
+
+class ShortBellForm(forms.Form):
+    slot=forms.ModelChoiceField(TimeSlot.objects.filter(sort_order__range=(1,7)),widget=forms.HiddenInput)
+    lesson_minutes=forms.IntegerField(label='Длительность пары',min_value=1,max_value=180,required=False,
+                                     widget=forms.NumberInput(attrs={'placeholder':'Общая','inputmode':'numeric'}))
+    break_minutes=forms.IntegerField(label='Перемена после',min_value=0,max_value=720,required=False,
+                                    widget=forms.NumberInput(attrs={'inputmode':'numeric'}))
+
+
+class ShortBellRows(BaseFormSet):
+    def __init__(self,*args,slots,**kwargs):
+        self.slots=slots
+        super().__init__(*args,**kwargs)
+    def clean(self):
+        if any(self.errors):
+            return
+        ids=[f.cleaned_data['slot'].pk for f in self.forms if f.cleaned_data.get('slot')]
+        if len(ids)!=len(self.slots) or set(ids)!={s.pk for s in self.slots}:
+            raise ValidationError('Состав пар изменился. Обновите страницу.')
+    def pending(self,day):
+        return [ShortenedBell(shortened_day=day,time_slot=f.cleaned_data['slot'],
+                    lesson_minutes=f.cleaned_data.get('lesson_minutes'),break_minutes=f.cleaned_data.get('break_minutes'))
+                for f in self.forms if f.cleaned_data and (f.cleaned_data.get('lesson_minutes') is not None or f.cleaned_data.get('break_minutes') is not None)]
 
 
 class PracticeForm(forms.ModelForm):
@@ -86,8 +114,21 @@ def bells_editor(request,site):
     formset=RowSet(request.POST if action=='weekday' else None,initial=initial,slots=slots,weekday=weekday)
     rule_id=request.POST.get('rule_id') or request.GET.get('short')
     rule=get_object_or_404(ShortenedDay,pk=rule_id) if rule_id else None
+    copy_from=get_object_or_404(ShortenedDay,pk=request.GET['copy']) if request.GET.get('copy') and not rule else None
+    short_initial=None if rule else {'date':timezone.localdate(),'lesson_count':7}
+    if copy_from:
+        short_initial={**model_to_dict(copy_from,fields=ShortDayForm.Meta.fields),'date':None,'is_active':True}
     short_form=ShortDayForm(request.POST if action=='short_day' else None,instance=rule,
-                            initial=None if rule else {'date':timezone.localdate()})
+                            initial=short_initial)
+    short_slots=[s for s in slots if 1<=s.sort_order<=7]
+    source=rule or copy_from
+    individual={b.time_slot_id:b for b in source.bells.all()} if source else {}
+    short_values=[{'slot':s.pk,'lesson_minutes':individual[s.pk].lesson_minutes if s.pk in individual else None,
+                   'break_minutes':individual[s.pk].break_minutes if s.pk in individual else None} for s in short_slots]
+    ShortSet=formset_factory(ShortBellForm,formset=ShortBellRows,extra=0,max_num=7,validate_max=True)
+    # Accept older open forms without losing already saved per-pair settings.
+    short_bound=action=='short_day' and any(key.startswith('short-') for key in request.POST)
+    short_set=ShortSet(request.POST if short_bound else None,initial=short_values,prefix='short',slots=short_slots)
     if request.method=='POST':
         if action=='weekday' and formset.is_valid():
             ids=[f.cleaned_data['slot'].pk for f in formset]
@@ -107,24 +148,42 @@ def bells_editor(request,site):
                                 bell.delete()
                 messages.success(request,'Звонки сохранены')
                 return redirect(f'{request.path}?weekday={weekday}')
-        elif action=='short_day' and short_form.is_valid():
-            with transaction.atomic():
-                saved=short_form.save()
-                services.audit(request.user,'edit_short_day',saved,new={'date':str(saved.date),'minutes':saved.lesson_minutes,'active':saved.is_active})
-            messages.success(request,'Сокращённый день сохранён')
-            return redirect(f'{request.path}?weekday={weekday}&short={saved.pk}')
+        elif action=='short_day':
+            rows_valid=not short_bound or short_set.is_valid()
+            if rows_valid and short_bound:
+                short_form.instance._pending_bells=short_set.pending(short_form.instance)
+            if short_form.is_valid() and rows_valid:
+                with transaction.atomic():
+                    services.lock_schedule()
+                    saved=short_form.save()
+                    if short_bound:
+                        saved.bells.all().delete()
+                        entries=short_set.pending(saved)
+                        ShortenedBell.objects.bulk_create([entry for entry in entries if saved.lesson_count is None or entry.time_slot.sort_order<=saved.lesson_count])
+                    services.audit(request.user,'edit_short_day',saved,new={'date':str(saved.date),'minutes':saved.lesson_minutes,
+                        'lesson_count':saved.lesson_count,'active':saved.is_active})
+                messages.success(request,'Сокращённый день сохранён')
+                return redirect(f'{request.path}?weekday={weekday}&short={saved.pk}')
         elif action=='disable_short' and rule:
             rule.is_active=False;rule.save(update_fields=['is_active'])
             services.audit(request.user,'disable_short_day',rule)
             messages.success(request,'Сокращённый день отключён')
             return redirect(request.path)
     preview=[]
-    if rule and rule.is_active and not (short_form.is_bound and short_form.errors):
+    if rule and rule.is_active and not (short_form.is_bound and short_form.errors) and not (short_bound and short_set.errors):
         times=shortened_times(rule.date,regular_bell_times(rule.date),rule)
         preview=[{'name':s.name,'start':times[s.pk][0],'end':times[s.pk][1]} for s in slots if s.sort_order and times[s.pk][0]]
+    monday=timezone.localdate()-timedelta(days=timezone.localdate().weekday())
+    base_times=[]
+    for number in range(6):
+        regular=regular_bell_times(monday+timedelta(days=number))
+        base_times.append({'weekday':number,'slots':[{'number':s.sort_order,
+            'start':regular[s.pk][0].isoformat(timespec='minutes') if regular[s.pk][0] else None,
+            'end':regular[s.pk][1].isoformat(timespec='minutes') if regular[s.pk][1] else None} for s in short_slots]})
     return render(request,'admin/bells_editor.html',dict(site.each_context(request),title='Звонки',
         weekday=weekday,weekdays=WEEKDAYS[:6],bell_rows=list(zip(formset,slots)),formset=formset,
-        short_form=short_form,rule=rule,preview=preview,short_days=ShortenedDay.objects.order_by('-date')[:40]))
+        short_form=short_form,short_set=short_set,short_rows=list(zip(short_set,short_slots)),short_base_times=base_times,
+        rule=rule,copy_from=copy_from,preview=preview,short_days=ShortenedDay.objects.order_by('-date')))
 
 
 def practices_editor(request,site):

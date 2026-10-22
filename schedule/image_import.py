@@ -497,6 +497,8 @@ def publish_review(batch,rows,user):
         raise ValidationError('Эта загрузка уже обработана')
     created=[]
     for row in rows:
+        from .timing import require_teaching_slot
+        require_teaching_slot(batch.target_date,row['slot'])
         group=StudentGroup.objects.get(pk=row['group_id'])
         svc.require_buildings(user,[group.building_id])
         if not GroupYear.objects.filter(group=group,year__start_date__lte=batch.target_date,year__end_date__gte=batch.target_date,status='active').exists():

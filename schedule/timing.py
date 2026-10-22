@@ -30,19 +30,31 @@ def regular_bell_times(day):
     return {slot.pk: overrides.get(slot.pk, (slot.start_time, slot.end_time)) for slot in TimeSlot.objects.all()}
 
 
-def shortened_times(day,times,rule):
+def shortened_times(day,times,rule,overrides=None):
     result=dict(times)
-    slots=[s for s in TimeSlot.objects.filter(sort_order__gt=0) if times.get(s.pk,(None,None))[0]]
+    slots=[]
+    for slot in TimeSlot.objects.filter(sort_order__gt=0):
+        if rule.lesson_count is not None and slot.sort_order>rule.lesson_count:
+            result[slot.pk]=(None,None)
+        elif times.get(slot.pk,(None,None))[0]:
+            slots.append(slot)
+    # Pending rows let the form validate the entire edited scheme before writing it.
+    overrides=overrides if overrides is not None else (list(rule.bells.all()) if rule.pk else [])
+    individual={row.time_slot_id:row for row in overrides}
     if not slots:
         return result
     cursor=datetime.combine(day,rule.start_time or times[slots[0].pk][0])
     for i,slot in enumerate(slots):
-        end=cursor+timedelta(minutes=rule.lesson_minutes)
+        row=individual.get(slot.pk)
+        duration=row.lesson_minutes if row and row.lesson_minutes is not None else rule.lesson_minutes
+        end=cursor+timedelta(minutes=duration)
         if end.date()!=day:
             raise ValidationError('Сокращённое расписание должно заканчиваться в тот же день')
         result[slot.pk]=(cursor.time(),end.time())
         if i<len(slots)-1:
-            if rule.keep_breaks:
+            if row and row.break_minutes is not None:
+                pause=row.break_minutes
+            elif rule.keep_breaks:
                 pause=max(0,(datetime.combine(day,times[slots[i+1].pk][0])-datetime.combine(day,times[slot.pk][1])).total_seconds()/60)
             else:
                 pause=rule.break_minutes or 0
@@ -58,7 +70,29 @@ def bell_times(day):
 
 def short_day_info(day):
     rule=ShortenedDay.objects.filter(date=day,is_active=True).first()
-    return {'id':rule.pk,'minutes':rule.lesson_minutes,'note':rule.note} if rule else None
+    if not rule:
+        return None
+    numbered=[b for b in bells_for(day) if b['number']>0]
+    durations={(datetime.combine(day,datetime.strptime(b['end'],'%H:%M').time())-
+                datetime.combine(day,datetime.strptime(b['start'],'%H:%M').time())).seconds//60 for b in numbered}
+    varied=len(durations)>1
+    count=len(numbered)
+    label=f'Сокращённый день · {count} '+('пара' if count==1 else 'пары' if 2<=count<=4 else 'пар')
+    if len(durations)==1:
+        label+=f' по {next(iter(durations))} мин'
+    return {'id':rule.pk,'minutes':rule.lesson_minutes,'note':rule.note,
+            'lesson_count':count,'varied_duration':varied,'label':label}
+
+
+def lesson_limit(day):
+    """A shorter teaching day hides late pairs without altering the Excel snapshot."""
+    return ShortenedDay.objects.filter(date=day,is_active=True).values_list('lesson_count',flat=True).first()
+
+
+def require_teaching_slot(day,number):
+    limit=lesson_limit(day)
+    if limit is not None and number>limit:
+        raise ValidationError(f'На {day:%d.%m.%Y} предусмотрено только {limit} пар')
 
 
 def slot_times(slot, day, times=None):
