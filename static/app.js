@@ -74,7 +74,7 @@ function lessonCard(l, groupId = null) {
     </article>`;
 }
 function dayPanel(day, gaps = true, room = false, groupId = null) {
-    const intervals=room?day.free_intervals:day.windows;
+    const intervals=room?day.free_slots:day.windows;
     return `<section class="panel"><div class="panel-head"><h2>${formatDate(day.date,{weekday:'long',day:'numeric',month:'short'})}</h2><span class="count">${day.lessons.filter(x=>!['cancelled','moved_out','reassigned'].includes(x.status)).length} занятий</span></div>${day.shortened_day?`<div class="day-notice">${esc(day.shortened_day.label)}</div>`:''}${day.practice?`<div class="practice-notice"><span>↗</span><div><strong>${esc(day.practice.label)}</strong>${day.practice.organization?`<p>${esc(day.practice.organization)}</p>`:''}</div></div>`:day.lessons.map(l=>lessonCard(l,groupId)).join('')||`<div class="empty"><strong>${day.has_data?'Занятий нет':'Нет расписания'}</strong>${day.empty_reason?`<p>${esc(day.empty_reason)}</p>`:''}${day.next_date?`<button class="btn small" data-date="${day.next_date}">Открыть ${formatDate(day.next_date,{weekday:'short',day:'numeric',month:'long'})} →</button>`:''}</div>`}${gaps&&intervals?.length?`<div class="panel-body count">${room?'Свободно':'Окна'}: ${intervals.map(x=>`${x.start}–${x.end}`).join(' · ')}</div>`:''}</section>`;
 }
 function sidebar() {

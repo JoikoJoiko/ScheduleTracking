@@ -50,11 +50,14 @@ test('arrows skip Sunday in both directions',()=>{
     assert.equal(vm.runInContext('weekdays.length',p.context),6);
 });
 
-test('teacher windows use vacant pairs while room availability retains breaks',()=>{
+test('room and teacher schedules never display breaks as vacant pairs',()=>{
     const p=page();
-    vm.runInContext("var day={date:'2026-10-19',has_data:true,lessons:[],windows:[],free_intervals:[{start:'10:00',end:'10:10'}]}",p.context);
+    vm.runInContext("var day={date:'2026-10-19',has_data:true,lessons:[],windows:[],free_slots:[],free_intervals:[{start:'10:00',end:'10:10'}]}",p.context);
     assert.doesNotMatch(vm.runInContext('dayPanel(day,true)',p.context),/Окна:/);
-    assert.match(vm.runInContext('dayPanel(day,true,true)',p.context),/Свободно: 10:00–10:10/);
+    assert.doesNotMatch(vm.runInContext('dayPanel(day,true,true)',p.context),/Свободно:|10:00–10:10/);
+    vm.runInContext("day.free_slots=[{slot:2,start:'10:10',end:'11:40'}];day.free_intervals=[{start:'10:00',end:'11:50'}]",p.context);
+    assert.match(vm.runInContext('dayPanel(day,true,true)',p.context),/Свободно: 10:10–11:40/);
+    assert.doesNotMatch(vm.runInContext('dayPanel(day,true,true)',p.context),/10:00–11:50/);
 });
 
 test('practice and subgroup cards carry their own visible labels',()=>{

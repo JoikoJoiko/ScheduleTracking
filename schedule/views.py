@@ -230,7 +230,13 @@ def schedule(request,kind,pk):
                            'start':practice.start_date.isoformat(),'organization':practice.organization,
                            'label':f'{practice.title} до {practice.end_date:%d.%m.%Y}'}
             coverage.update(has_data=True,empty_reason='',next_date=None)
+        # Room schedules list complete available pairs, excluding break padding.
+        free_slots=[]
+        if kind=='rooms' and coverage['has_data'] and obj.is_active and obj.building.is_active:
+            free_slots=[{'slot':s['number'],'start':s['start'],'end':s['end']} for s in bells_for(day)
+                if any(g['start']<=s['start'] and s['end']<=g['end'] for g in gaps)]
         days.append({'date':day.isoformat(),'lessons':lessons,'free_intervals':gaps if coverage['has_data'] else [],
+                     'free_slots':free_slots,
                      'windows':svc.lesson_windows([x for x in lessons if x['status']!='reassigned'],day),
                      'practice':practice_info,'shortened_day':short_day_info(day),'week':week_info(day),**coverage})
     return JsonResponse({'id':pk,'name':obj.number if kind=='rooms' else obj.name,'kind':kind,'days':days,

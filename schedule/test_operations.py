@@ -1,9 +1,10 @@
-from datetime import date,time,timedelta
+from datetime import date,time,timedelta,datetime
 from django.test import TestCase,Client,override_settings
 from django.core.exceptions import ValidationError
 from django.conf import settings
+from django.utils import timezone
 from . import tests as fixtures,services as svc
-from .models import ShortenedDay,PracticePeriod,TimeSlot,WeekdayBell,Subject,Participant,AuditLog
+from .models import ShortenedDay,PracticePeriod,TimeSlot,WeekdayBell,Subject,Participant,AuditLog,RoomBlock
 from .timing import bells_for
 from .curriculum import curriculum_for
 
@@ -69,6 +70,39 @@ class OperationsTests(TestCase):
         self.assertEqual(svc.free_intervals(lessons,self.day),[{'start':'10:00','end':'10:10'}])
         result=self.client.get(f'/api/teachers/{self.teacher.pk}/schedule',{'date':str(self.day)}).json()['days'][0]
         self.assertEqual(result['windows'],[])
+
+    def test_room_schedule_shows_only_whole_free_pairs_without_break_padding(self):
+        second=self.make_lesson(time_slot=self.slot2)
+        url=f'/api/rooms/{self.room.pk}/schedule'
+        result=self.client.get(url,{'date':str(self.day)}).json()['days'][0]
+        self.assertEqual(result['free_intervals'],[{'start':'10:00','end':'10:10'}])
+        self.assertEqual(result['free_slots'],[])
+        second.delete()
+        result=self.client.get(url,{'date':str(self.day)}).json()['days'][0]
+        self.assertEqual(result['free_intervals'],[{'start':'10:00','end':'11:40'}])
+        self.assertEqual(result['free_slots'],[{'slot':2,'start':'10:10','end':'11:40'}])
+
+    def test_room_free_pairs_follow_short_day_bells_and_exclude_partial_blocks(self):
+        self.short_day()
+        url=f'/api/rooms/{self.room.pk}/schedule'
+        result=self.client.get(url,{'date':str(self.day)}).json()['days'][0]
+        self.assertEqual(result['free_slots'],[{'slot':2,'start':'09:25','end':'10:10'}])
+        RoomBlock.objects.create(room=self.room,reason='Уборка',created_by=self.admin,
+            start_at=timezone.make_aware(datetime.combine(self.day,time(9,35))),
+            end_at=timezone.make_aware(datetime.combine(self.day,time(9,40))))
+        result=self.client.get(url,{'date':str(self.day)}).json()['days'][0]
+        self.assertEqual(result['free_slots'],[])
+        self.assertTrue(result['free_intervals'])
+
+    def test_inactive_room_building_or_unknown_schedule_do_not_advertise_free_pairs(self):
+        url=f'/api/rooms/{self.room.pk}/schedule'
+        for obj,field,value in [(self.room,'is_active',False),(self.building,'is_active',False),(self.version,'status','draft')]:
+            with self.subTest(model=type(obj).__name__):
+                original=getattr(obj,field)
+                setattr(obj,field,value);obj.save(update_fields=[field])
+                result=self.client.get(url,{'date':str(self.day)}).json()['days'][0]
+                self.assertEqual(result['free_slots'],[])
+                setattr(obj,field,original);obj.save(update_fields=[field])
 
     def test_only_full_missing_pairs_between_classes_are_windows(self):
         third=TimeSlot.objects.create(name='3 пара',sort_order=3,start_time=time(12),end_time=time(13,30))
