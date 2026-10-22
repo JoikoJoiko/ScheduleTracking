@@ -17,7 +17,7 @@ API расположен в `/api`, без завершающего `/`. Дат�
 | GET | Параметры / результат |
 |---|---|
 | `/api/meta` | `date`; текущее время, учебные годы/периоды, звонки выбранной даты, `week` выбранной даты и `current_week` сегодняшнего дня, время обновления, флаг сотрудника |
-| `/api/bells` | `date, weekday=0..6` (необязательно, день в выбранной неделе); `date, weekday, slots, week` с учётом звонков по дням |
+| `/api/bells` | `date, weekday=0..5` (необязательно, день в выбранной неделе); `date, weekday, slots, week, shortened_day` с учётом звонков по дням и сокращения на дату |
 | `/api/subjects` | `group` обязателен; `date, period, q`; `group, period, version, subjects, teachers, subgroups`. У предмета: `id, name, short_name, teachers, weeks` (номера 1/2) |
 | `/api/groups` | `q, course, specialty, building, year, archive=1` |
 | `/api/teachers` | `q, archive=1` |
@@ -35,9 +35,13 @@ API расположен в `/api`, без завершающего `/`. Дат�
 
 `week` содержит `number` (1/2 или null вне настроенного года), `label`, `type` (`odd` = первая, `even` = вторая), даты `start/end`, `anchor_date`, `anchor_number`, `year_id`, `overridden`. Опорная дата — понедельник. Календарное исключение меняет номер только выбранного дня.
 
-В каждом дне расписания также есть `week`, `empty_reason`, `next_date`. `has_data` относится к выбранной группе/преподавателю/кабинету. До начала действия файла возвращается объяснение и ближайшая действующая дата того же дня недели; занятия задним числом не создаются.
+В каждом дне расписания также есть `week`, `empty_reason`, `next_date`, `windows`, `practice`, `shortened_day`. `has_data` относится к выбранной группе/преподавателю/кабинету. До начала действия файла возвращается объяснение и ближайшая действующая дата того же дня недели; занятия задним числом не создаются. `view=week` возвращает шесть дней, понедельник–субботу; запрос дня воскресенья — пустой массив `days`.
 
-`GET /api/admin/image-candidates?group=…&date=…&subject=…&teacher=…` требует сотрудника с доступом к группе. Возвращает словарь `/api/subjects` и `suggestions: {subject_id, teacher_id}`. Неоднозначный или отсутствующий кандидат — null. Эндпоинт ничего не публикует.
+`windows` содержит только целые свободные пары между занятиями: `{slot,start,end}`. `free_intervals` сохраняет прежний смысл свободных временных интервалов, включая перемены. У группы на практике `lessons=[]`, а `practice` содержит `{id,title,start,end,organization,label}` с включительным окончанием; иначе null. `shortened_day` — `{id,minutes,note}` или null. Классные часы имеют `event_kind="class_hour"`, учебные занятия — `"lesson"`; классные часы исключены из `/api/subjects`. `/api/meta` дополнительно содержит `version`, `shortened_day`, `manage_bells`.
+
+`GET /api/admin/image-candidates?group=…&date=…&subject=…&teacher=…&room=…&slot=…` требует сотрудника с доступом к группе. Возвращает словарь `/api/subjects` и `suggestions: {subject_id,teacher_id,room_id,subgroup_id,inferred,confidence,inferences}`. Близкий вариант подбирается в словаре группы; предположения отмечены `inferred`, `inferences` объясняет выбор, `confidence` — эвристическая оценка 0–100, не статистическая вероятность. При отсутствии данных идентификатор может быть null. Эндпоинт ничего не публикует.
+
+Изображения используют `target_group_id` и `target_subgroup_id`, чтобы менять только выбранных участников совместной пары. Остальные участники сохраняются; повторные редакции выбираются отдельно для каждой области изменения. Операционные HTML-формы звонков и практик доступны администратору в `/admin/bells/` и `/admin/practices/`, требуют сессии и CSRF.
 
 ### Ответ расписания
 
