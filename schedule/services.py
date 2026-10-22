@@ -1,5 +1,7 @@
 """Single source of truth for public schedules, previews and publication checks."""
 from copy import deepcopy
+import hashlib
+import json
 from datetime import datetime, timedelta, time
 from django.core.exceptions import ValidationError, PermissionDenied
 from django.db import transaction
@@ -213,11 +215,33 @@ def overlaps(start, end, other_start, other_end):
     return start < other_end and other_start < end
 
 
-def conflicts_for(date, lessons):
+def room_overlap_key(lesson):
+    """Bind an exception to exact participants, resources, time and replacement IDs."""
+    snapshot={key:lesson.get(key) for key in ['id','change_id','date','slot','start','end','subject_id','teacher_id','room_id']}
+    snapshot['groups']=sorted((g['id'],g.get('subgroup_id') or 0) for g in lesson['groups'])
+    return hashlib.sha256(json.dumps(snapshot,sort_keys=True).encode()).hexdigest()
+
+
+def describe_lesson(lesson):
+    if not lesson:
+        return ''
+    groups=', '.join(g['name']+(f' (подгруппа {g["subgroup"]})' if g.get('subgroup') else '') for g in lesson['groups'])
+    pair=f'{lesson["slot"]} пара' if lesson['slot'] else 'Кураторский час'
+    return f'{groups} · {pair}, {lesson["start"]}–{lesson["end"]} · {lesson["subject"]} · {lesson["teacher"]} · кабинет {lesson["room"]}'
+
+
+def conflict_message(conflict):
+    return f'{conflict["date"]}: {conflict["type"]}. {describe_lesson(conflict["lesson"])}'+(
+        f' ↔ {describe_lesson(conflict["other"])}' if conflict['other'] else '')
+
+
+def conflicts_for(date, lessons,include_allowed=False):
     active = [x for x in lessons if live(x) and x['start'] and x['end']]
     conflicts = []
-    def add(kind, a, b=None):
-        conflicts.append({'type': kind, 'date': date.isoformat(), 'lesson': a, 'other': b})
+    def add(kind, a, b=None,allowed=False):
+        conflicts.append({'type': kind, 'date': date.isoformat(), 'lesson': a, 'other': b,'allowed':allowed})
+    approvals=dict(Change.objects.filter(pk__in={x['change_id'] for x in active if x.get('change_id')}).values_list('pk','room_overlap_approvals'))
+    keys={id(x):room_overlap_key(x) for x in active}
     rooms = {x.pk: x for x in Room.objects.select_related('building')}
     day_start = timezone.make_aware(datetime.combine(date, time.min))
     blocks = list(RoomBlock.objects.filter(start_at__lt=day_start+timedelta(days=1), end_at__gt=day_start))
@@ -236,7 +260,10 @@ def conflicts_for(date, lessons):
             joint_hour=(a['slot']==b['slot']==0 and a.get('curator_shift') and a.get('event_kind')==b.get('event_kind')=='class_hour'
                 and all(a.get(key)==b.get(key) for key in ['slot','start','end','curator_shift','subject_id','teacher_id','room_id']))
             if a['room_id'] == b['room_id'] and not joint_hour:
-                add('Пересечение аудиторий', a, b)
+                allowed=any(p.get('lesson')==keys[id(own)] and p.get('other')==keys[id(other)]
+                    for own,other in [(a,b),(b,a)] for p in approvals.get(own.get('change_id'),[]))
+                if include_allowed or not allowed:
+                    add('Пересечение аудиторий', a, b,allowed=allowed)
             if a['teacher_id'] == b['teacher_id'] and not joint_hour:
                 add('Пересечение преподавателя', a, b)
             if any(ga['id'] == gb['id'] and (not ga['subgroup_id'] or not gb['subgroup_id'] or ga['subgroup_id'] == gb['subgroup_id']) for ga in a['groups'] for gb in b['groups']):
@@ -280,7 +307,7 @@ def publish_version(version, user):
     for date in candidate_dates(version):
         conflicts = conflicts_for(date, schedule_on(date, version=version))
         if conflicts:
-            raise ValidationError(f'{date}: {conflicts[0]["type"]}. Публикация заблокирована.')
+            raise ValidationError(conflict_message(conflicts[0]))
     old = version.status
     version.status = 'published'
     version.published_at = timezone.now()
@@ -330,7 +357,7 @@ def publish_change(change, user):
                     raise ValidationError('Группа не активна в выбранном учебном году')
         errors = conflicts_for(date, proposed)
         if errors:
-            raise ValidationError(f'{date}: {errors[0]["type"]}. Публикация заблокирована.')
+            raise ValidationError(conflict_message(errors[0]))
     change.status = 'published'
     change.published_at = timezone.now()
     change.save()

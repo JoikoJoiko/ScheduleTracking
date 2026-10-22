@@ -128,7 +128,7 @@ class LessonAdmin(ScopedAdmin):
 class ChangeAdmin(ScopedAdmin):
     list_display = ['id','target_date','kind','original','room','status','created_by']
     list_filter = ['status','kind','target_date']
-    readonly_fields = ['status','created_by','created_at','published_at']
+    readonly_fields = ['status','created_by','created_at','published_at','room_overlap_approvals']
     actions = ['publish','withdraw']
     def has_change_permission(self,request,obj=None):
         return request.user.is_staff and (not obj or obj.status=='draft')
@@ -315,6 +315,7 @@ class ImageUploadForm(forms.Form):
 
 class ImageRowForm(forms.Form):
     use=forms.BooleanField(label='Проверено',required=False)
+    allow_room_overlap=forms.BooleanField(label='Оставить пересечение кабинета',required=False)
     group=forms.ModelChoiceField(StudentGroup.objects.all(),required=False,label='Группа')
     subgroup=forms.ModelChoiceField(Subgroup.objects.select_related('group'),required=False,label='Подгруппа')
     slot=forms.IntegerField(min_value=1,max_value=7,required=False,label='Пара')
@@ -390,7 +391,7 @@ class ImageAdmin(SafeAdmin):
     def review(self,request,pk):
         from django.shortcuts import get_object_or_404
         from django.forms import formset_factory
-        from .image_import import publish_review,infer_row
+        from .image_import import publish_review,infer_row,ImageReviewConflicts
         batch=get_object_or_404(self.get_queryset(request),pk=pk)
         if request.method=='POST' and request.POST.get('reanalyze') and batch.status=='review':
             from .image_import import analyze
@@ -412,7 +413,7 @@ class ImageAdmin(SafeAdmin):
             except (ValidationError,OSError,subprocess.TimeoutExpired,json.JSONDecodeError) as exc:
                 self.message_user(request,str(exc),messages.ERROR)
             return redirect('admin:schedule_image_review',pk=batch.pk)
-        initial=[];dictionaries={};previews_rows=[];base=services.base_schedule(batch.target_date)
+        initial=[];dictionaries={};previews_rows=[];base=services.base_schedule(batch.target_date);review_conflicts=[]
         for row in batch.payload:
             group_id=row.get('group_id')
             if group_id not in dictionaries:
@@ -423,6 +424,7 @@ class ImageAdmin(SafeAdmin):
             # Older pending uploads also show when newly completed fields are inferred.
             previews_rows.append(row if 'inferred' in row else {**row,**{key:suggestions[key] for key in ['inferred','confidence','inferences']}})
             initial.append({'group':row.get('group_id'),'subgroup':row.get('subgroup_id'),'slot':row.get('slot'),
+                'allow_room_overlap':row.get('allow_room_overlap',False),
                 'kind':row.get('kind','replace'),'subject':row.get('subject_id') or suggestions['subject_id'],
                 'teacher':row.get('teacher_id') or suggestions['teacher_id'],'room':row.get('room_id') or suggestions['room_id']})
         FormSet=formset_factory(ImageRowForm,extra=3,max_num=250,validate_max=True,can_delete=True)
@@ -433,19 +435,35 @@ class ImageAdmin(SafeAdmin):
                 return redirect('admin:schedule_imageimport_changelist')
             if formset.is_valid():
                 rows=[]
-                for form in formset:
+                for index,form in enumerate(formset):
                     d=form.cleaned_data
                     if not d or d.get('DELETE') or not d.get('use'):
                         continue
-                    rows.append({'group_id':d['group'].pk,'slot':d['slot'],'kind':d['kind'],
+                    rows.append({'group_id':d['group'].pk,'slot':d['slot'],'kind':d['kind'],'review_row':index+1,
+                        'allow_room_overlap':d.get('allow_room_overlap',False),
                         'subgroup_id':d['subgroup'].pk if d.get('subgroup') else None,
                         **{key+'_id':d[key].pk if d.get(key) else None for key in ['subject','teacher','room']}})
                 try:
                     publish_review(batch,rows,request.user)
                     self.message_user(request,'Замены опубликованы',messages.SUCCESS)
                     return redirect('admin:schedule_imageimport_changelist')
+                except ImageReviewConflicts as exc:
+                    review_conflicts=exc.conflicts
                 except (ValidationError,PermissionDenied) as exc:
                     self.message_user(request,str(exc),messages.ERROR)
         previews=[r.get('group_text','')+' · '+r.get('raw','') for r in batch.payload]
-        items=[(form,previews[i] if i<len(previews) else '',previews_rows[i] if i<len(previews_rows) else {}) for i,form in enumerate(formset)]
-        return render(request,'admin/image_review.html',dict(self.admin_site.each_context(request),title='Проверка замен',batch=batch,formset=formset,items=items))
+        items=[]
+        for i,form in enumerate(formset):
+            row=dict(previews_rows[i]) if i<len(previews_rows) else {}
+            row['conflicts']=[]
+            for conflict in review_conflicts:
+                if i+1 not in conflict['rows']:
+                    continue
+                own_first=conflict['first_row']==i+1
+                row['conflicts'].append({**conflict,
+                    'counterpart':conflict['other_text'] if own_first else conflict['lesson_text'],
+                    'counterpart_row':conflict['second_row'] if own_first else conflict['first_row']})
+            row['room_conflicts']=any(c['room_conflict'] for c in row['conflicts'])
+            items.append((form,previews[i] if i<len(previews) else '',row))
+        return render(request,'admin/image_review.html',dict(self.admin_site.each_context(request),title='Проверка замен',
+            batch=batch,formset=formset,items=items,review_conflicts=review_conflicts))

@@ -8,6 +8,12 @@ function reviewRowEmpty(row) {
         reviewField(row,'kind')?.value!=='cancel';
 }
 
+function resetRoomOverlap(target) {
+    if (!target?.name || !/-(group|subgroup|slot|kind|subject|teacher|room)$/.test(target.name)) return;
+    const row=target.closest('tr'), approval=row && reviewField(row,'allow_room_overlap');
+    if (approval) approval.checked=false;
+}
+
 document.querySelectorAll('.review-table').forEach(table => {
     const form=table.closest('form'), selectAll=form.querySelector('[data-review-select-all]');
     const removeEmpty=form.querySelector('[data-review-remove-empty]'), status=form.querySelector('[data-review-status]');
@@ -38,8 +44,8 @@ document.querySelectorAll('.review-table').forEach(table => {
         refresh(`Удалено: ${empty.length}. `);
     });
     [...table.tBodies[0].rows].forEach(row => {row.hidden=reviewRowDeleted(row);});
-    table.addEventListener('change',() => refresh());
-    table.addEventListener('input',() => refresh());
+    table.addEventListener('change',event => {resetRoomOverlap(event?.target);refresh();});
+    table.addEventListener('input',event => {resetRoomOverlap(event?.target);refresh();});
     refresh();
 });
 

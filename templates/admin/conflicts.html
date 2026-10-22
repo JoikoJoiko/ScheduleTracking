@@ -1,4 +1,4 @@
 {% extends "admin/base_site.html" %}
 {% block content %}<form><label>Дата <input type="date" name="date" value="{{ date }}"></label><button>Проверить</button></form>
-{% for row in rows %}<p class="errornote">{{ row.type }} · {{ row.lesson.start }}–{{ row.lesson.end }} · {{ row.lesson.subject }} · {{ row.lesson.room }}
-{% if row.lesson.change_id %}<a href="/admin/schedule/change/{{ row.lesson.change_id }}/change/">Замена</a>{% else %}<a href="/admin/schedule/lesson/{{ row.lesson.id }}/change/">Занятие</a>{% endif %}</p>{% empty %}<p>Конфликтов на выбранную дату нет.</p>{% endfor %}{% endblock %}
+{% for row in rows %}<article class="{% if row.allowed %}conflict-approved{% else %}errornote{% endif %}"><strong>{{ row.type }}{% if row.allowed %} · разрешено{% endif %}</strong><p>{{ row.lesson_text }}
+{% if row.lesson.change_id %}<a href="/admin/schedule/change/{{ row.lesson.change_id }}/change/">Замена ↗</a>{% else %}<a href="/admin/schedule/lesson/{{ row.lesson.id }}/change/">Занятие ↗</a>{% endif %}</p>{% if row.other %}<p>↔ {{ row.other_text }} {% if row.other.change_id %}<a href="/admin/schedule/change/{{ row.other.change_id }}/change/">Замена ↗</a>{% else %}<a href="/admin/schedule/lesson/{{ row.other.id }}/change/">Занятие ↗</a>{% endif %}</p>{% endif %}</article>{% empty %}<p>Конфликтов на выбранную дату нет.</p>{% endfor %}{% endblock %}

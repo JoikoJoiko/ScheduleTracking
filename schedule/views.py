@@ -378,7 +378,7 @@ def admin_conflicts(request):
     if denied:
         return denied
     day=selected_date(request)
-    conflicts=svc.conflicts_for(day,svc.schedule_on(day))
+    conflicts=svc.conflicts_for(day,svc.schedule_on(day),include_allowed=request.GET.get('include_allowed')=='1')
     ids=svc.scope_ids(request.user)
     if ids is not None:
         conflicts=[x for x in conflicts if x['lesson']['building_id'] in ids]
@@ -436,9 +436,12 @@ def conflicts_page(request):
         day=selected_date(request)
     except ValueError:
         day=timezone.localdate()
-    rows=svc.conflicts_for(day,svc.schedule_on(day))
+    rows=svc.conflicts_for(day,svc.schedule_on(day),include_allowed=True)
     ids=svc.scope_ids(request.user)
     if ids is not None:
         rows=[x for x in rows if x['lesson']['building_id'] in ids]
+    for row in rows:
+        row['lesson_text']=svc.describe_lesson(row['lesson'])
+        row['other_text']=svc.describe_lesson(row['other'])
     from django.contrib import admin
     return render(request,'admin/conflicts.html',dict(admin.site.each_context(request),title='Контроль конфликтов',rows=rows,date=day.isoformat()))
