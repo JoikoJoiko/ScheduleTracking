@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from time import monotonic
 from difflib import SequenceMatcher
 from PIL import Image,ImageOps,ImageFilter
 from django.conf import settings
@@ -58,21 +59,21 @@ def table_edges(image):
     return xs,ys
 
 
-def run_ocr(image):
+def run_ocr(image,timeout=90):
     factor=min(3,2500/image.width,2500/image.height)
     enlarged=image.resize((round(image.width*factor),round(image.height*factor)),Image.Resampling.LANCZOS)
     with tempfile.TemporaryDirectory(prefix='schedule-ocr-') as folder:
         path=Path(folder)/'input.png';enlarged.save(path)
         if os.name=='nt':
             result=subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',
-                str(settings.BASE_DIR/'tools'/'ocr_windows.ps1'),'-Path',str(path)],capture_output=True,timeout=90,
+                str(settings.BASE_DIR/'tools'/'ocr_windows.ps1'),'-Path',str(path)],capture_output=True,timeout=timeout,
                 creationflags=subprocess.CREATE_NO_WINDOW)
             if result.returncode:
                 raise ValidationError('Локальный OCR Windows недоступен. Проверьте русский языковой пакет.')
             parsed=json.loads(result.stdout.decode('utf-8-sig'))
             words=[word for line in parsed['lines'] for word in line['words']]
         elif shutil.which('tesseract'):
-            result=subprocess.run(['tesseract',str(path),'stdout','-l','rus+eng','tsv'],capture_output=True,timeout=90)
+            result=subprocess.run(['tesseract',str(path),'stdout','-l','rus+eng','tsv'],capture_output=True,timeout=timeout)
             if result.returncode:
                 raise ValidationError('Для OCR установите русский языковой пакет Tesseract')
             words=[{'text':r['text'],'x':int(r['left']),'y':int(r['top']),'width':int(r['width']),'height':int(r['height'])}
@@ -383,6 +384,36 @@ def cell_ink(image,box):
     return sum(value<140 for value in crop.getdata())>max(16,crop.width*crop.height*.025)
 
 
+def recognize_fragments(image,boxes):
+    """A second pass isolates difficult cells from neighboring table text."""
+    result=[]
+    deadline=monotonic()+25
+    for box in boxes:
+        if monotonic()>=deadline:
+            break
+        crop=ImageOps.autocontrast(image.crop(tuple(map(int,box))).convert('L'))
+        factor=min(4,800/max(1,crop.width),600/max(1,crop.height))
+        crop=crop.resize((max(1,round(crop.width*factor)),max(1,round(crop.height*factor))),Image.Resampling.LANCZOS)
+        crop=ImageOps.expand(crop,border=24,fill='white').convert('RGB')
+        try:
+            result.append(in_box(run_ocr(crop,timeout=max(1,min(20,deadline-monotonic()))),(0,0,crop.width,crop.height)))
+        except subprocess.TimeoutExpired:
+            result.append('')
+            break
+    return result
+
+
+def proposal_quality(row,dictionary):
+    """A newly readable teacher matters even if the room still has low confidence."""
+    dictionary=dictionary or {}
+    decoded=[value for raw in row.get('raw_variants',[]) if (value:=decode_cell(raw))]
+    subject=next((s for s in dictionary.get('subjects',[]) if s['id']==row.get('subject_id')),None)
+    teacher=next((t for t in dictionary.get('teachers',[]) if t['id']==row.get('teacher_id')),None)
+    subject_match=max((subject_score(d['subject_text'],subject['name']) for d in decoded),default=0) if subject else 0
+    teacher_match=max((teacher_score(d['teacher_text'],teacher['name']) for d in decoded),default=0) if teacher else 0
+    return (sum(bool(row.get(f+'_id')) for f in ['subject','teacher','room']),subject_match+teacher_match,row.get('confidence',0))
+
+
 def analyze(image,layout,target_date=None):
     from django.utils import timezone
     target_date=target_date or timezone.localdate()
@@ -411,7 +442,7 @@ def analyze(image,layout,target_date=None):
                     raw=in_box(words,cell if len(cells)>1 else (xs[slot],top,xs[slot+1],bottom))
                     if decode_cell(raw) or (not raw and cell_ink(image,cell)):
                         pending.append({'group_box':(xs[0]+2,top+2,xs[1]-2,min(bottom-2,top+17)),
-                            'cell_box':cell,'raw':raw,'group_text':group_text,'slot':slot,
+                            'cell_box':cell,'row_box':(xs[0],top,xs[-1],bottom),'raw':raw,'group_text':group_text,'slot':slot,
                             'subgroup_number':index if len(cells)>1 else None})
     else:
         # Locate the row of group names, then use their horizontal positions as block anchors.
@@ -443,7 +474,7 @@ def analyze(image,layout,target_date=None):
                     continue
                 raw=in_box(words,box)
                 pending.append({'group_box':(left+2,group_top+2,right-2,group_bottom-2),
-                    'cell_box':box,'raw':raw,'group_text':group_text,'slot':slot})
+                    'cell_box':box,'row_box':(left,top,right,bottom),'raw':raw,'group_text':group_text,'slot':slot})
     if pending:
         refined=recognize_boxes(image,[box for row in pending for box in [row['group_box'],row['cell_box']]])
         dictionaries={};base=svc.base_schedule(target_date)
@@ -467,11 +498,54 @@ def analyze(image,layout,target_date=None):
             if group_id and normalized(group_text)!=normalized(dictionaries[group_id]['group']['name']):
                 item['inferred']=True;item['confidence']=min(item['confidence'],80)
                 item['inferences'].insert(0,'Группа: исправлено повреждённое обозначение')
-            rows.append({**item,'group_text':group_text,'group_id':group_id,'kind':'replace'})
+            rows.append({**item,'group_text':group_text,'group_id':group_id,'kind':'replace',
+                         'source_box':list(row['cell_box']),'row_box':list(row['row_box']),
+                         'group_box':list(row['group_box']),'ocr_attempts':1})
+        # Bound the slow isolated pass; remaining rows retain their crops for review.
+        difficult=[r for r in rows if not all(r.get(f+'_id') for f in ['subject','teacher','room']) or r.get('confidence',0)<60][:12]
+        if difficult:
+            try:
+                texts=recognize_fragments(image,[tuple(r['source_box']) for r in difficult])
+                for row,raw in zip(difficult,texts):
+                    row['ocr_attempts']=2
+                    decoded=decode_cell(raw)
+                    if decoded is None:
+                        continue
+                    candidate={**row,**decoded,'raw_variants':[*row['raw_variants'],raw]}
+                    candidate.update(infer_row(row['group_id'],target_date,candidate,dictionaries[row['group_id']],base))
+                    dictionary=dictionaries[row['group_id']]
+                    if row['group_id'] and normalized(row['group_text'])!=normalized(dictionary['group']['name']):
+                        candidate['inferred']=True;candidate['confidence']=min(candidate['confidence'],80)
+                        candidate['inferences'].insert(0,'Группа: исправлено повреждённое обозначение')
+                    if proposal_quality(candidate,dictionary)>proposal_quality(row,dictionary):
+                        row.update(candidate)
+                    else:
+                        row['raw_variants'].append(raw)
+            except (ValidationError,subprocess.TimeoutExpired,OSError,json.JSONDecodeError):
+                warnings.append('Повторное чтение фрагментов недоступно. Проверьте выделенные строки по изображению.')
     if not rows:
         warnings.append('Изменения не распознаны. Добавьте строки вручную или загрузите изображение чётче.')
     warnings.append('Проверьте строки по оригиналу. Поля с пометкой «Подобрано» заполнены по расписанию группы.')
     return rows,warnings
+
+
+def fragment_image(batch,index,context=False):
+    """Coordinates come only from stored analysis, never from request parameters."""
+    if not 0<=index<len(batch.payload):
+        raise ValidationError('Строка не найдена')
+    row=batch.payload[index]
+    box=row.get('row_box' if context else 'source_box')
+    if not isinstance(box,list) or len(box)!=4 or not all(isinstance(n,(int,float)) for n in box):
+        raise ValidationError('Для этого импорта нет фрагментов. Выполните повторный анализ.')
+    with batch.image.open('rb') as source,Image.open(source) as image:
+        x1,y1,x2,y2=box
+        if not (0<=x1<x2<=image.width and 0<=y1<y2<=image.height):
+            raise ValidationError('Некорректные границы фрагмента')
+        crop=image.crop(tuple(map(int,box))).convert('RGB')
+        factor=min(4,1600/crop.width,600/crop.height)
+        crop=crop.resize((max(1,round(crop.width*factor)),max(1,round(crop.height*factor))),Image.Resampling.LANCZOS)
+        output=io.BytesIO();crop.save(output,format='PNG')
+        return output.getvalue()
 
 
 def upload_image(upload,target_date,layout,user):

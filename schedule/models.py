@@ -101,6 +101,7 @@ class StudentGroup(Named):
     graduation_year = models.PositiveIntegerField('Год выпуска')
     status = models.CharField('Статус', max_length=15, choices=GROUP_STATUS, default='active')
     class Meta(Named.Meta):
+        ordering = ['-admission_year', 'name']
         verbose_name = 'Группа'
         verbose_name_plural = 'Группы'
 
@@ -123,6 +124,7 @@ class Subgroup(Named):
     def __str__(self):
         return f'{self.group} / {self.name}'
     class Meta(Named.Meta):
+        ordering = ['-group__admission_year', 'group__name', 'name']
         constraints = [models.UniqueConstraint(fields=['group', 'name'], name='subgroup_unique')]
         verbose_name = 'Подгруппа'
         verbose_name_plural = 'Подгруппы'
@@ -131,6 +133,13 @@ class Subgroup(Named):
 class Subject(Named):
     short_name = models.CharField('Сокращение', max_length=80, blank=True)
     is_curricular = models.BooleanField('Учебная дисциплина', default=True)
+    def save(self,*args,**kwargs):
+        from .class_hours import is_class_hour
+        if is_class_hour(self.name):
+            self.is_curricular=False
+            if kwargs.get('update_fields'):
+                kwargs['update_fields']=set(kwargs['update_fields'])|{'is_curricular'}
+        return super().save(*args,**kwargs)
     class Meta(Named.Meta):
         verbose_name = 'Дисциплина'
         verbose_name_plural = 'Дисциплины'
@@ -169,6 +178,21 @@ class WeekdayBell(models.Model):
         constraints = [models.UniqueConstraint(fields=['day_of_week', 'time_slot'], name='weekday_bell_unique')]
         verbose_name = 'Звонки по дню недели'
         verbose_name_plural = 'Звонки по дням недели'
+
+
+class CuratorBell(models.Model):
+    shift = models.PositiveSmallIntegerField('Смена', unique=True, choices=[(1,'Первая'),(2,'Вторая')])
+    start_time = models.TimeField('Начало')
+    end_time = models.TimeField('Окончание')
+    def clean(self):
+        if self.start_time and self.end_time and self.start_time >= self.end_time:
+            raise ValidationError('Окончание кураторского часа должно быть позже начала')
+    def __str__(self):
+        return f'Кураторский час · {self.get_shift_display()} смена'
+    class Meta:
+        ordering = ['shift']
+        verbose_name = 'Кураторский час в понедельник'
+        verbose_name_plural = 'Кураторские часы в понедельник'
 
 
 class ShortenedDay(models.Model):
@@ -262,9 +286,13 @@ class Lesson(models.Model):
     teacher = models.ForeignKey(Teacher, on_delete=models.PROTECT, verbose_name='Преподаватель')
     room = models.ForeignKey(Room, on_delete=models.PROTECT, verbose_name='Аудитория')
     lesson_type = models.CharField('Вид занятия', max_length=80, blank=True)
+    curator_shift = models.PositiveSmallIntegerField('Смена кураторского часа', null=True, blank=True,
+        choices=[(1,'Первая'),(2,'Вторая')])
     def clean(self):
         if bool(self.start_time) != bool(self.end_time) or (self.start_time and self.start_time >= self.end_time):
             raise ValidationError('Укажите корректный интервал занятия')
+        if self.curator_shift and self.time_slot_id and self.time_slot.sort_order!=0:
+            raise ValidationError({'curator_shift':'Смена указывается только для кураторского часа без номера пары'})
         if self.version.status != 'draft':
             raise ValidationError('Опубликованные версии неизменяемы. Создайте новую версию или замену.')
     def __str__(self):

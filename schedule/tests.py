@@ -16,6 +16,7 @@ from .importing import HEADERS,FIELDS,preview_import,confirm_import,parse_xlsx,i
 class ScheduleTests(TestCase):
     def setUp(self):
         cache.clear()
+        WeekdayBell.objects.all().delete()
         TimeSlot.objects.all().delete()
         ImportProfile.objects.all().delete()
         self.admin=get_user_model().objects.create_superuser(username='admin',password='local-test-password')

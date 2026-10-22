@@ -15,7 +15,7 @@ from django.utils import timezone
 from .models import *
 from . import services as svc
 from .importing import preview_import, confirm_import, import_report
-from .timing import week_info, bells_for, slot_times, short_day_info
+from .timing import week_info, bells_for, slot_times, short_day_info, curator_bells_for
 from .curriculum import curriculum_for, schedule_coverage
 
 
@@ -87,7 +87,7 @@ def meta(request):
     change=Change.objects.filter(status='published').order_by('-published_at').first()
     stamps=[x.published_at for x in [version,change] if x]
     last_operation=AuditLog.objects.filter(action__in=['publish_version','publish_change','withdraw_change','rollback_version','activate_year',
-        'edit_bells','reset_bells','edit_short_day','disable_short_day','edit_practice','disable_practice']).first()
+        'edit_bells','reset_bells','edit_short_day','disable_short_day','edit_practice','disable_practice','repair_class_hours']).first()
     if last_operation:
         stamps.append(last_operation.created_at)
     organization=SystemSetting.objects.filter(key='organization').values_list('value',flat=True).first() or 'Расписание колледжа'
@@ -97,6 +97,7 @@ def meta(request):
         'room_types':list(RoomType.objects.values('id','name')),
         'specialties':list(Specialty.objects.values('id','name','code')),
         'slots':bells_for(selected_date(request)),
+        'curator_bells':curator_bells_for(selected_date(request)),
         'shortened_day':short_day_info(selected_date(request)),
         'week':week_info(selected_date(request)), 'current_week':week_info(timezone.localdate()),
         'periods':list(Period.objects.values('id','name','year_id','start_date','end_date').order_by('-start_date','end_date','-pk')),
@@ -113,7 +114,8 @@ def bells(request):
         if weekday not in range(6):
             raise ValidationError('День недели от 0 до 5 (понедельник — суббота)')
         day=day-timedelta(days=day.weekday())+timedelta(days=weekday)
-    return JsonResponse({'date':day.isoformat(),'weekday':day.weekday(),'slots':bells_for(day),'week':week_info(day),'shortened_day':short_day_info(day)})
+    return JsonResponse({'date':day.isoformat(),'weekday':day.weekday(),'slots':bells_for(day),
+        'curator_bells':curator_bells_for(day),'week':week_info(day),'shortened_day':short_day_info(day)})
 
 
 @api
@@ -164,7 +166,8 @@ def catalog(request,kind):
             if request.GET.get('building') and x.building_id!=int(request.GET['building']):
                 continue
             if matches(x.name,query):
-                rows.append({'id':x.pk,'name':x.name,'specialty':x.specialty.name if x.specialty else '', 'building':x.building.name,'status':status,'course':membership.course if membership else None})
+                rows.append({'id':x.pk,'name':x.name,'specialty':x.specialty.name if x.specialty else '', 'building':x.building.name,'status':status,
+                    'course':membership.course if membership else None,'admission_year':x.admission_year})
     elif kind=='teachers':
         for x in Teacher.objects.all():
             if (archive or x.is_active) and matches(x.name,query):
@@ -175,7 +178,11 @@ def catalog(request,kind):
                 rows.append({'id':x.pk,'name':x.number,'building':x.building.name,'type':x.room_type.name,'capacity':x.capacity,'active':x.is_active})
     else:
         raise Http404
-    rows.sort(key=lambda x:(not x['name'].casefold().startswith(query.casefold()),x['name']))
+    if kind=='groups':
+        # Keep course order even during search; the intake suffix is chronological.
+        rows.sort(key=lambda x:(x['course'] or 99,-x['admission_year'],x['name']))
+    else:
+        rows.sort(key=lambda x:(not x['name'].casefold().startswith(query.casefold()),x['name']))
     return data_response(rows,request)
 
 

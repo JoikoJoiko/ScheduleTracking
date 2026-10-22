@@ -8,7 +8,7 @@ from django.forms import formset_factory,BaseFormSet
 from django.forms.models import model_to_dict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-from .models import TimeSlot, WeekdayBell, ShortenedDay,ShortenedBell, PracticePeriod, WEEKDAYS
+from .models import TimeSlot, WeekdayBell, CuratorBell, ShortenedDay,ShortenedBell, PracticePeriod, WEEKDAYS
 from . import services
 from .timing import regular_bell_times, shortened_times
 
@@ -22,6 +22,20 @@ class BellRowForm(forms.Form):
         data=super().clean()
         if data.get('override') and (not data.get('start') or not data.get('end') or data['start']>=data['end']):
             raise ValidationError('Укажите начало и окончание пары')
+        return data
+
+
+class CuratorForm(forms.Form):
+    morning_start=forms.TimeField(label='Первая смена · начало',widget=forms.TimeInput(format='%H:%M',attrs={'type':'time'}))
+    morning_end=forms.TimeField(label='Первая смена · окончание',widget=forms.TimeInput(format='%H:%M',attrs={'type':'time'}))
+    afternoon_start=forms.TimeField(label='Вторая смена · начало',widget=forms.TimeInput(format='%H:%M',attrs={'type':'time'}))
+    afternoon_end=forms.TimeField(label='Вторая смена · окончание',widget=forms.TimeInput(format='%H:%M',attrs={'type':'time'}))
+    def clean(self):
+        data=super().clean()
+        for prefix in ['morning','afternoon']:
+            start,end=data.get(prefix+'_start'),data.get(prefix+'_end')
+            if start and end and start>=end:
+                self.add_error(prefix+'_end','Окончание должно быть позже начала')
         return data
 
 
@@ -104,13 +118,18 @@ def bells_editor(request,site):
     except ValueError:
         weekday=0
     weekday=weekday if weekday in range(6) else 0
-    slots=list(TimeSlot.objects.all())
+    slots=list(TimeSlot.objects.filter(sort_order__gt=0))
     overrides={row.time_slot_id:row for row in WeekdayBell.objects.filter(day_of_week=weekday)}
     initial=[{'slot':slot.pk,'override':slot.pk in overrides,
               'start':overrides[slot.pk].start_time if slot.pk in overrides else slot.start_time,
               'end':overrides[slot.pk].end_time if slot.pk in overrides else slot.end_time} for slot in slots]
     RowSet=formset_factory(BellRowForm,formset=BellRows,extra=0,max_num=100,validate_max=True)
     action=request.POST.get('action')
+    curator_initial={}
+    for bell in CuratorBell.objects.all():
+        prefix='morning' if bell.shift==1 else 'afternoon'
+        curator_initial.update({prefix+'_start':bell.start_time,prefix+'_end':bell.end_time})
+    curator_form=CuratorForm(request.POST if action=='curator' else None,initial=curator_initial)
     formset=RowSet(request.POST if action=='weekday' else None,initial=initial,slots=slots,weekday=weekday)
     rule_id=request.POST.get('rule_id') or request.GET.get('short')
     rule=get_object_or_404(ShortenedDay,pk=rule_id) if rule_id else None
@@ -130,7 +149,16 @@ def bells_editor(request,site):
     short_bound=action=='short_day' and any(key.startswith('short-') for key in request.POST)
     short_set=ShortSet(request.POST if short_bound else None,initial=short_values,prefix='short',slots=short_slots)
     if request.method=='POST':
-        if action=='weekday' and formset.is_valid():
+        if action=='curator' and curator_form.is_valid():
+            with transaction.atomic():
+                for shift,prefix in [(1,'morning'),(2,'afternoon')]:
+                    bell,_=CuratorBell.objects.update_or_create(shift=shift,defaults={
+                        'start_time':curator_form.cleaned_data[prefix+'_start'],
+                        'end_time':curator_form.cleaned_data[prefix+'_end']})
+                    services.audit(request.user,'edit_bells',bell,new={'shift':shift,'start':str(bell.start_time),'end':str(bell.end_time)})
+            messages.success(request,'Кураторские часы сохранены')
+            return redirect(f'{request.path}?weekday=0')
+        elif action=='weekday' and formset.is_valid():
             ids=[f.cleaned_data['slot'].pk for f in formset]
             if len(set(ids))!=len(slots) or set(ids)!={s.pk for s in slots}:
                 messages.error(request,'Состав пар изменился. Обновите страницу.')
@@ -181,7 +209,7 @@ def bells_editor(request,site):
             'start':regular[s.pk][0].isoformat(timespec='minutes') if regular[s.pk][0] else None,
             'end':regular[s.pk][1].isoformat(timespec='minutes') if regular[s.pk][1] else None} for s in short_slots]})
     return render(request,'admin/bells_editor.html',dict(site.each_context(request),title='Звонки',
-        weekday=weekday,weekdays=WEEKDAYS[:6],bell_rows=list(zip(formset,slots)),formset=formset,
+        weekday=weekday,weekdays=WEEKDAYS[:6],bell_rows=list(zip(formset,slots)),formset=formset,curator_form=curator_form,
         short_form=short_form,short_set=short_set,short_rows=list(zip(short_set,short_slots)),short_base_times=base_times,
         rule=rule,copy_from=copy_from,preview=preview,short_days=ShortenedDay.objects.order_by('-date')))
 

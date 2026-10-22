@@ -4,10 +4,12 @@ from datetime import date, time
 from .workbooks import load_schedule_workbook
 from django.core.exceptions import ValidationError
 from .models import (AcademicYear, Period, Building, RoomType, Room, Teacher, Subject,
-                     StudentGroup, GroupYear, Subgroup, TimeSlot)
+                     StudentGroup, GroupYear, Subgroup, TimeSlot, WeekdayBell, CuratorBell)
+from .class_hours import is_class_hour, TITLE
 
-BELLS = [('08:00','09:30'),('09:40','11:10'),('11:40','13:10'),('13:20','14:50'),
-         ('15:00','16:30'),('17:00','18:30'),('18:40','20:10')]
+BELLS = [('09:00','10:30'),('10:40','12:10'),('12:40','14:10'),('14:20','15:50'),
+         ('16:00','17:30'),('18:00','19:30'),('19:40','21:10')]
+MONDAY_BELLS = BELLS[:3]+[('14:50','16:20'),('16:30','18:00'),('18:30','20:00'),('20:10','21:40')]
 DAYS = ['понедельник','вторник','среда','четверг','пятница','суббота','воскресенье']
 TEACHER = re.compile(r'([А-ЯЁA-Z][а-яёa-zА-ЯЁ-]+)\s+([А-ЯЁA-Z])\s*[.,]?\s*([А-ЯЁA-Z])\s*[.,]?')
 
@@ -70,6 +72,9 @@ def parse_college(data,filename=''):
             if not 1<=course<=4:
                 raise ValidationError(f'{name}: курс {course} выходит за диапазон 1–4')
             groups.append({'name':name,'admission_year':intake,'course':course})
+        # Class hours sit outside the merged weekday header. Look ahead to the
+        # next numbered pair so Monday morning belongs to the correct week.
+        contexts={}
         weekday=None;cycle=0;seen_days=set()
         for r in range(group_row+2,sheet.max_row+1):
             label=text(sheet.cell(r,1).value).casefold()
@@ -79,13 +84,23 @@ def parse_college(data,filename=''):
                     cycle+=1;seen_days=set()
                 seen_days.add(weekday)
             raw_slot=text(sheet.cell(r,2).value)
-            conversation=any(grid.value(r,c).startswith('Разговоры') for c in columns)
-            if weekday is None or (not raw_slot.isdigit() and not conversation):
+            if weekday is not None and raw_slot.isdigit():
+                contexts[r]=(weekday,cycle,int(raw_slot))
+        for r in range(group_row+2,sheet.max_row+1):
+            context=contexts.get(r)
+            conversation=any(is_class_hour(grid.value(r,c+part)) for c in columns for part in [0,2])
+            if not context and not conversation:
                 continue
+            next_context=next((contexts[n] for n in range(r+1,min(r+10,sheet.max_row+1)) if n in contexts),None)
+            if not context:
+                context=next_context
+            if not context:
+                warnings.append(f'{sheet.title}:{r}: не определён день кураторского часа')
+                continue
+            weekday,cycle,slot=context
             if cycle>1:
                 errors.append(f'{sheet.title}:{r}: больше двух недель')
                 continue
-            slot=int(raw_slot) if raw_slot.isdigit() else 0
             for c in columns:
                 whole=grid.merged.get((r,c))
                 whole=whole is not None and whole.max_col>=c+2
@@ -94,19 +109,27 @@ def parse_college(data,filename=''):
                     subject=grid.value(r,subject_col)
                     if not subject or subject in ['-','—']:
                         continue
+                    class_hour=is_class_hour(subject)
+                    if r not in contexts and not class_hour:
+                        continue
+                    area=grid.merged.get((r,subject_col))
+                    if class_hour and area and area.min_row!=r:
+                        continue
                     room=grid.value(r,room_col)
                     teacher=grid.value(r+1,subject_col)
-                    if conversation:
+                    if class_hour:
                         match=TEACHER.search(subject)
                         teacher=teacher_name(match[0]) if match else ''
                         subject=subject[:match.start()].strip() if match else subject
+                        subject=TITLE
                     teacher=teacher_name(teacher)
                     source=f'{sheet.title}!{sheet.cell(r,subject_col).coordinate}'
                     if not room or room==subject or not teacher or not TEACHER.fullmatch(teacher):
                         errors.append(f'{source}: проверьте преподавателя и кабинет ({teacher!r}, {room!r})')
                         continue
                     rows.append({'group':grid.value(group_row,c),'subgroup':subgroup,'subject':subject,
-                        'teacher':teacher,'room':room,'day_of_week':weekday,'slot':slot,
+                        'teacher':teacher,'room':room,'day_of_week':weekday,'slot':0 if class_hour else slot,
+                        **({'curator_shift':1 if slot==1 else 2} if class_hour else {}),
                         'week_type':'odd' if cycle==0 else 'even','source':source})
                     if len(rows)>5000:
                         raise ValidationError('Не более 5000 записей за один импорт')
@@ -114,7 +137,7 @@ def parse_college(data,filename=''):
         raise ValidationError('В файле нет занятий')
     # Match the two week blocks by timetable content, not by cell formatting.
     return rows,{'groups':groups,'start':start.isoformat(),'end':end.isoformat(),
-        'year_start':school_year,'warnings':warnings,'course':groups[0]['course'] if groups else None},errors
+        'year_start':school_year,'warnings':warnings,'parser_revision':2,'course':groups[0]['course'] if groups else None},errors
 
 
 def install_bells():
@@ -122,6 +145,11 @@ def install_bells():
         TimeSlot.objects.update_or_create(sort_order=number,defaults={'name':f'{number} пара',
             'start_time':time.fromisoformat(start),'end_time':time.fromisoformat(end)})
     TimeSlot.objects.update_or_create(sort_order=0,defaults={'name':'Разговоры о важном','start_time':None,'end_time':None})
+    for number,(start,end) in enumerate(MONDAY_BELLS[3:],4):
+        WeekdayBell.objects.get_or_create(day_of_week=0,time_slot=TimeSlot.objects.get(sort_order=number),
+            defaults={'start_time':time.fromisoformat(start),'end_time':time.fromisoformat(end)})
+    for shift,start,end in [(1,'08:20','08:55'),(2,'14:15','14:45')]:
+        CuratorBell.objects.get_or_create(shift=shift,defaults={'start_time':time.fromisoformat(start),'end_time':time.fromisoformat(end)})
 
 
 def ensure_period(metadata):
@@ -154,5 +182,6 @@ def materialize(rows,metadata,period):
             subject.is_curricular=False;subject.save(update_fields=['is_curricular'])
         payload.append({'day_of_week':row['day_of_week'],'time_slot_id':slot.pk,'group_id':group.pk,
             'subgroup_id':subgroup.pk if subgroup else None,'room_id':room.pk,'teacher_id':teacher.pk,
-            'subject_id':subject.pk,'week_type':row['week_type'],'lesson_type':'' if curricular else 'class_hour','start_time':None,'end_time':None})
+            'subject_id':subject.pk,'week_type':row['week_type'],'lesson_type':'' if curricular else 'class_hour',
+            'curator_shift':row.get('curator_shift'),'start_time':None,'end_time':None})
     return payload

@@ -3,6 +3,7 @@ from django.core.exceptions import ValidationError, PermissionDenied
 from django.forms.models import model_to_dict
 from django.core.serializers.json import DjangoJSONEncoder
 import json
+import subprocess
 from django.shortcuts import render, redirect
 from django.urls import path
 from django import forms
@@ -360,6 +361,7 @@ class ImageAdmin(SafeAdmin):
     def get_urls(self):
         return [path('upload/',self.admin_site.admin_view(self.upload),name='schedule_image_upload'),
             path('<int:pk>/review/',self.admin_site.admin_view(self.review),name='schedule_image_review'),
+            path('<int:pk>/fragment/<int:index>/',self.admin_site.admin_view(self.fragment),name='schedule_image_fragment'),
             path('<int:pk>/source/',self.admin_site.admin_view(self.source),name='schedule_image_source')]+super().get_urls()
     def upload(self,request):
         from .image_import import upload_image
@@ -376,11 +378,40 @@ class ImageAdmin(SafeAdmin):
         from django.http import FileResponse
         batch=get_object_or_404(self.get_queryset(request),pk=pk)
         return FileResponse(batch.image.open('rb'),content_type='image/png')
+    def fragment(self,request,pk,index):
+        from django.shortcuts import get_object_or_404
+        from django.http import HttpResponse, Http404
+        from .image_import import fragment_image
+        batch=get_object_or_404(self.get_queryset(request),pk=pk)
+        try:
+            return HttpResponse(fragment_image(batch,index,request.GET.get('context')=='1'),content_type='image/png')
+        except ValidationError as exc:
+            raise Http404(str(exc)) from exc
     def review(self,request,pk):
         from django.shortcuts import get_object_or_404
         from django.forms import formset_factory
         from .image_import import publish_review,infer_row
         batch=get_object_or_404(self.get_queryset(request),pk=pk)
+        if request.method=='POST' and request.POST.get('reanalyze') and batch.status=='review':
+            from .image_import import analyze
+            from django.db import transaction
+            from PIL import Image
+            try:
+                with batch.image.open('rb') as source,Image.open(source) as original:
+                    if original.width*original.height>16000000:
+                        raise ValidationError('Изображение больше 16 мегапикселей')
+                    rows,warnings=analyze(original.convert('RGB'),batch.layout,batch.target_date)
+                with transaction.atomic():
+                    services.lock_schedule()
+                    batch=ImageImport.objects.select_for_update().get(pk=batch.pk)
+                    if batch.status!='review':
+                        raise ValidationError('Импорт уже завершён. Повторный анализ отменён.')
+                    batch.payload=rows;batch.warnings=warnings;batch.save(update_fields=['payload','warnings'])
+                    services.audit(request.user,'reanalyze_image',batch,new={'rows':len(rows)})
+                self.message_user(request,'Изображение распознано повторно',messages.SUCCESS)
+            except (ValidationError,OSError,subprocess.TimeoutExpired,json.JSONDecodeError) as exc:
+                self.message_user(request,str(exc),messages.ERROR)
+            return redirect('admin:schedule_image_review',pk=batch.pk)
         initial=[];dictionaries={};previews_rows=[];base=services.base_schedule(batch.target_date)
         for row in batch.payload:
             group_id=row.get('group_id')

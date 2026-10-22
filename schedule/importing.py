@@ -158,8 +158,11 @@ def confirm_import(batch, user):
     if not batch.metadata.get('college'):
         require_buildings(user, Room.objects.filter(pk__in=[x['room_id'] for x in batch.payload]).values_list('building_id',flat=True))
     prior = ImportBatch.objects.filter(file_hash=batch.file_hash, period=batch.period,
-        effective_from=batch.effective_from,effective_to=batch.effective_to,status='confirmed',version__status='published').first()
-    if prior:
+        effective_from=batch.effective_from,effective_to=batch.effective_to,status='confirmed',version__status='published').order_by('-pk').first()
+    # Re-reading an old workbook with a corrected parser creates a reviewable version.
+    upgraded=prior and batch.metadata.get('college') and prior.metadata.get('college') and (
+        batch.metadata.get('parser_revision',1)>prior.metadata.get('parser_revision',1))
+    if prior and not upgraded:
         raise ValidationError(f'Этот файл уже опубликован (импорт №{prior.pk})')
     version = ScheduleVersion.objects.create(name=f'Импорт {batch.filename}',period=batch.period,
         effective_from=batch.effective_from,effective_to=batch.effective_to)
@@ -180,7 +183,7 @@ def confirm_import(batch, user):
     return version
 
 
-def populate_version(version,payload):
+def populate_version(version,payload,reuse_existing=False):
     # Identical resource rows represent one joint lesson, not a false room conflict.
     joint = {}
     for raw in payload:
@@ -190,10 +193,15 @@ def populate_version(version,payload):
             row[key] = time.fromisoformat(row[key]) if row[key] else None
         key = tuple(row.items())
         lesson = joint.get(key)
+        if lesson is None and reuse_existing:
+            lesson=version.lessons.filter(**row).first()
         if lesson is None:
             lesson = Lesson.objects.create(version=version, **row)
             joint[key] = lesson
-        Participant.objects.create(lesson=lesson, group_id=group, subgroup_id=subgroup)
+        if reuse_existing:
+            Participant.objects.get_or_create(lesson=lesson,group_id=group,subgroup_id=subgroup)
+        else:
+            Participant.objects.create(lesson=lesson, group_id=group, subgroup_id=subgroup)
 
 
 def import_report(batch):

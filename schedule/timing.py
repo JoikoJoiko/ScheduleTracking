@@ -1,7 +1,7 @@
 """One calendar and bell calculation for lessons, replacements and room occupancy."""
 from datetime import datetime, timedelta
 from django.core.exceptions import ValidationError
-from .models import AcademicYear, CalendarDay, TimeSlot, WeekdayBell, ShortenedDay
+from .models import AcademicYear, CalendarDay, TimeSlot, WeekdayBell, ShortenedDay, CuratorBell
 
 
 def week_info(day, year=None, calendar=None):
@@ -99,10 +99,23 @@ def slot_times(slot, day, times=None):
     return (times if times is not None else bell_times(day)).get(slot.pk, (slot.start_time, slot.end_time))
 
 
+def curator_bells_for(day):
+    if day.weekday()!=0:
+        return []
+    return [{'shift':bell.shift,'name':'Кураторский час','subject':'Разговоры о важном',
+             'start':bell.start_time.isoformat(timespec='minutes'),
+             'end':bell.end_time.isoformat(timespec='minutes')} for bell in CuratorBell.objects.all()]
+
+
+def curator_times(shift):
+    bell=CuratorBell.objects.filter(shift=shift).first() if shift else None
+    return (bell.start_time,bell.end_time) if bell else (None,None)
+
+
 def bells_for(day):
     if day.weekday()==6:
         return []
     times = bell_times(day)
     return [{'id': slot.pk, 'number': slot.sort_order, 'name': slot.name,
              'start': start.isoformat(timespec='minutes'), 'end': end.isoformat(timespec='minutes')}
-            for slot in TimeSlot.objects.all() for start, end in [times[slot.pk]] if start and end]
+            for slot in TimeSlot.objects.filter(sort_order__gt=0) for start, end in [times[slot.pk]] if start and end]

@@ -6,7 +6,8 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from .models import *
-from .timing import week_info, bell_times, slot_times,lesson_limit,require_teaching_slot
+from .timing import week_info, bell_times, slot_times,lesson_limit,require_teaching_slot,curator_times
+from .class_hours import is_class_hour, TITLE
 
 
 def audit(user, action, obj, old=None, new=None):
@@ -31,6 +32,8 @@ def require_buildings(user, ids):
 
 def lesson_dict(lesson, date, times=None):
     start,end=slot_times(lesson.time_slot,date,times)
+    if lesson.curator_shift:
+        start,end=curator_times(lesson.curator_shift)
     start=lesson.start_time or start
     end=lesson.end_time or end
     return {'id': lesson.pk, 'date': date.isoformat(), 'slot': lesson.time_slot.sort_order,
@@ -38,7 +41,8 @@ def lesson_dict(lesson, date, times=None):
         'end': end.isoformat(timespec='minutes') if end else None,
         'time_label':lesson.time_slot.name,
         'event_kind':'lesson' if lesson.subject.is_curricular else 'class_hour',
-        'subject_id': lesson.subject_id, 'subject': lesson.subject.name, 'teacher_id': lesson.teacher_id,
+        'curator_shift':lesson.curator_shift,
+        'subject_id': lesson.subject_id, 'subject': TITLE if is_class_hour(lesson.subject.name) else lesson.subject.name, 'teacher_id': lesson.teacher_id,
         'teacher': lesson.teacher.name, 'room_id': lesson.room_id, 'room': lesson.room.number,
         'building_id': lesson.room.building_id, 'building': lesson.room.building.name,
         'groups': [{'id': p.group_id, 'name': p.group.name, 'subgroup_id': p.subgroup_id,
@@ -97,6 +101,8 @@ def apply_change(change, base):
     if change.time_slot or (change.kind=='move' and change.original_id):
         slot=change.time_slot or change.original.time_slot
         start,end=slot_times(slot,change.new_date if change.kind=='move' else change.target_date)
+        if slot.sort_order==0 and change.original_id and change.original.curator_shift:
+            start,end=curator_times(change.original.curator_shift)
         if not change.time_slot and change.original.start_time:
             start,end=change.original.start_time,change.original.end_time
         result.update(slot=slot.sort_order,time_label=slot.name,
@@ -226,9 +232,12 @@ def conflicts_for(date, lessons):
         for b in active[i+1:]:
             if not overlaps(a['start'], a['end'], b['start'], b['end']):
                 continue
-            if a['room_id'] == b['room_id']:
+            # A curator can lead several groups, recorded in separate course files.
+            joint_hour=(a['slot']==b['slot']==0 and a.get('curator_shift') and a.get('event_kind')==b.get('event_kind')=='class_hour'
+                and all(a.get(key)==b.get(key) for key in ['slot','start','end','curator_shift','subject_id','teacher_id','room_id']))
+            if a['room_id'] == b['room_id'] and not joint_hour:
                 add('Пересечение аудиторий', a, b)
-            if a['teacher_id'] == b['teacher_id']:
+            if a['teacher_id'] == b['teacher_id'] and not joint_hour:
                 add('Пересечение преподавателя', a, b)
             if any(ga['id'] == gb['id'] and (not ga['subgroup_id'] or not gb['subgroup_id'] or ga['subgroup_id'] == gb['subgroup_id']) for ga in a['groups'] for gb in b['groups']):
                 add('Пересечение группы / подгруппы', a, b)

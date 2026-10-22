@@ -64,6 +64,16 @@ test('practice and subgroup cards carry their own visible labels',()=>{
     assert.match(subgroup,/subgroup-lesson/);assert.match(subgroup,/Подгруппа 2/);
 });
 
+test('curator hours have their alias and shift bells without a numbered pair',()=>{
+    const p=page();
+    const card=vm.runInContext("lessonCard({date:'2026-10-26',status:'regular',slot:0,start:'08:20',end:'08:55',subject:'Разговоры о важном',event_kind:'class_hour',groups:[]})",p.context);
+    assert.match(card,/Кураторский час/);assert.doesNotMatch(card,/0 пара/);
+    vm.runInContext("meta={today:'2026-10-26',now:'2026-10-26T08:25:00',slots:[{number:1,start:'09:00',end:'10:30'}],week:{label:'1-я неделя'},curator_bells:[{shift:1,start:'08:20',end:'08:55'},{shift:2,start:'14:15',end:'14:45'}]}; var result=''; app.innerHTML=''; Object.defineProperty(app,'innerHTML',{set:v=>result=v}); bells()",p.context);
+    const html=vm.runInContext('result',p.context);
+    assert.match(html,/Кураторский час/);assert.match(html,/1-я смена/);assert.match(html,/14:15–14:45/);
+    assert.match(html,/09:00/);assert.doesNotMatch(html,/0 ПАРА/);
+});
+
 const shortScheme=()=>({lessonCount:3,lessonMinutes:40,start:'08:00',keepBreaks:true,breakMinutes:'',
     regular:[{number:1,start:'08:00',end:'09:30'},{number:2,start:'09:40',end:'11:10'},{number:3,start:'11:40',end:'13:10'}],
     rows:[{number:1,lessonMinutes:'',breakMinutes:5},{number:2,lessonMinutes:'',breakMinutes:25},

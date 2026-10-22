@@ -56,6 +56,15 @@ class CollegeImportTests(TestCase):
         second=preview_import(SimpleUploadedFile('same.xlsx',data),self.profile,None,None,None,self.user)
         with self.assertRaises(ValidationError):confirm_import(second,self.user)
         self.assertEqual(StudentGroup.objects.count(),1)
+    def test_old_parser_allows_one_reviewed_reimport_with_corrected_parser(self):
+        data=self.workbook()
+        def batch():
+            return preview_import(SimpleUploadedFile('same.xlsx',data),self.profile,None,None,None,self.user)
+        first=batch();confirm_import(first,self.user)
+        first.metadata.pop('parser_revision');first.save(update_fields=['metadata'])
+        second=batch();version=confirm_import(second,self.user)
+        self.assertNotEqual(version.pk,first.version_id)
+        with self.assertRaises(ValidationError):confirm_import(batch(),self.user)
     def test_untimed_event_does_not_invent_occupancy(self):
         version=confirm_import(self.batch(),self.user)
         lesson=version.lessons.first();lesson.time_slot=TimeSlot.objects.get(sort_order=0);lesson.save()
@@ -63,7 +72,7 @@ class CollegeImportTests(TestCase):
         self.assertIsNone(rows[0]['start'])
         self.assertEqual(svc.conflicts_for(date(2026,10,26),rows),[])
     def test_bells_and_admin_page(self):
-        self.assertEqual(TimeSlot.objects.get(sort_order=1).start_time,time(8))
+        self.assertEqual(TimeSlot.objects.get(sort_order=1).start_time,time(9))
         self.assertEqual(self.client.get('/bells').status_code,200)
         self.client.force_login(self.user)
         self.assertEqual(self.client.get('/admin/schedule/timeslot/').status_code,200)
