@@ -240,8 +240,13 @@ def conflicts_for(date, lessons,include_allowed=False):
     conflicts = []
     def add(kind, a, b=None,allowed=False):
         conflicts.append({'type': kind, 'date': date.isoformat(), 'lesson': a, 'other': b,'allowed':allowed})
-    approvals=dict(Change.objects.filter(pk__in={x['change_id'] for x in active if x.get('change_id')}).values_list('pk','room_overlap_approvals'))
+    approvals={c['pk']:c for c in Change.objects.filter(pk__in={x['change_id'] for x in active if x.get('change_id')})
+        .values('pk','room_overlap_approvals','teacher_overlap_approvals')}
     keys={id(x):room_overlap_key(x) for x in active}
+    def approved(a,b,field):
+        # Each resource needs its own decision for these exact two lessons.
+        return any(p.get('lesson')==keys[id(own)] and p.get('other')==keys[id(other)]
+            for own,other in [(a,b),(b,a)] for p in approvals.get(own.get('change_id'),{}).get(field,[]))
     rooms = {x.pk: x for x in Room.objects.select_related('building')}
     day_start = timezone.make_aware(datetime.combine(date, time.min))
     blocks = list(RoomBlock.objects.filter(start_at__lt=day_start+timedelta(days=1), end_at__gt=day_start))
@@ -260,12 +265,13 @@ def conflicts_for(date, lessons,include_allowed=False):
             joint_hour=(a['slot']==b['slot']==0 and a.get('curator_shift') and a.get('event_kind')==b.get('event_kind')=='class_hour'
                 and all(a.get(key)==b.get(key) for key in ['slot','start','end','curator_shift','subject_id','teacher_id','room_id']))
             if a['room_id'] == b['room_id'] and not joint_hour:
-                allowed=any(p.get('lesson')==keys[id(own)] and p.get('other')==keys[id(other)]
-                    for own,other in [(a,b),(b,a)] for p in approvals.get(own.get('change_id'),[]))
+                allowed=approved(a,b,'room_overlap_approvals')
                 if include_allowed or not allowed:
                     add('Пересечение аудиторий', a, b,allowed=allowed)
             if a['teacher_id'] == b['teacher_id'] and not joint_hour:
-                add('Пересечение преподавателя', a, b)
+                allowed=approved(a,b,'teacher_overlap_approvals')
+                if include_allowed or not allowed:
+                    add('Пересечение преподавателя', a, b,allowed=allowed)
             if any(ga['id'] == gb['id'] and (not ga['subgroup_id'] or not gb['subgroup_id'] or ga['subgroup_id'] == gb['subgroup_id']) for ga in a['groups'] for gb in b['groups']):
                 add('Пересечение группы / подгруппы', a, b)
     return conflicts

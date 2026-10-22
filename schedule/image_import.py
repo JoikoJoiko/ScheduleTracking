@@ -563,6 +563,7 @@ class ImageReviewConflicts(ValidationError):
             self.conflicts.append({**conflict,'rows':row_numbers,'first_row':first_row,'second_row':second_row,
                 'lesson_text':svc.describe_lesson(first),'other_text':svc.describe_lesson(second),
                 'room_conflict':conflict['type']=='Пересечение аудиторий',
+                'teacher_conflict':conflict['type']=='Пересечение преподавателя',
                 'start':max(first['start'],second['start']) if second else first['start'],
                 'end':min(first['end'],second['end']) if second else first['end']})
             if not conflict.get('allowed'):
@@ -577,7 +578,12 @@ def publish_review(batch,rows,user):
     batch=ImageImport.objects.select_for_update().get(pk=batch.pk)
     if batch.status!='review':
         raise ValidationError('Эта загрузка уже обработана')
-    created=[];row_by_change={};allowed_changes=set()
+    created=[];row_by_change={}
+    approval_types={
+        'Пересечение аудиторий':('allow_room_overlap','room_overlap_approvals','room'),
+        'Пересечение преподавателя':('allow_teacher_overlap','teacher_overlap_approvals','teacher'),
+    }
+    allowed_changes={field:set() for flag,field,resource in approval_types.values()}
     for index,row in enumerate(rows):
         from .timing import require_teaching_slot
         require_teaching_slot(batch.target_date,row['slot'])
@@ -603,8 +609,9 @@ def publish_review(batch,rows,user):
         change.full_clean();svc.require_buildings(user,svc.change_buildings(change))
         created.append(change)
         row_by_change[change.pk]=row.get('review_row',index+1)
-        if row.get('allow_room_overlap'):
-            allowed_changes.add(change.pk)
+        for flag,field,resource in approval_types.values():
+            if row.get(flag):
+                allowed_changes[field].add(change.pk)
     if not created:
         raise ValidationError('Выберите хотя бы одну проверенную строку')
     # Transaction isolation keeps these unpublished externally until the entire batch passes.
@@ -614,24 +621,28 @@ def publish_review(batch,rows,user):
         change.status='published';change.published_at=published_at;change.save()
     proposed=svc.schedule_on(batch.target_date)
     conflicts=svc.conflicts_for(batch.target_date,proposed,include_allowed=True)
-    approvals={change.pk:[] for change in created}
+    approvals={change.pk:{field:[] for field in allowed_changes} for change in created}
     for conflict in conflicts:
-        if conflict['type']!='Пересечение аудиторий' or conflict['allowed']:
+        if conflict['type'] not in approval_types or conflict['allowed']:
             continue
+        flag,field,resource=approval_types[conflict['type']]
         first,second=conflict['lesson'],conflict['other']
         for own,other in [(first,second),(second,first)]:
-            if own.get('change_id') in allowed_changes:
-                approvals[own['change_id']].append({'lesson':svc.room_overlap_key(own),'other':svc.room_overlap_key(other),
-                    'date':batch.target_date.isoformat(),'room':own['room'],'with':svc.describe_lesson(other)})
+            if own.get('change_id') in allowed_changes[field]:
+                approvals[own['change_id']][field].append({'lesson':svc.room_overlap_key(own),'other':svc.room_overlap_key(other),
+                    'date':batch.target_date.isoformat(),resource:own[resource],'with':svc.describe_lesson(other)})
     for change in created:
-        if approvals[change.pk]:
-            change.room_overlap_approvals=approvals[change.pk]
-            change.save(update_fields=['room_overlap_approvals'])
+        fields=[]
+        for field,entries in approvals[change.pk].items():
+            if entries:
+                setattr(change,field,entries);fields.append(field)
+        if fields:
+            change.save(update_fields=fields)
     checked=svc.conflicts_for(batch.target_date,proposed,include_allowed=True)
     if any(not c['allowed'] for c in checked):
         raise ImageReviewConflicts(checked,row_by_change)
     for change in created:
-        svc.audit(user,'publish_change',change,new={'room_overlap_approvals':change.room_overlap_approvals})
+        svc.audit(user,'publish_change',change,new={field:getattr(change,field) for field in allowed_changes})
     batch.status='published';batch.payload=rows;batch.save()
     svc.audit(user,'publish_image',batch,new={'changes':[x.pk for x in created]})
     return created

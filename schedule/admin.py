@@ -128,7 +128,7 @@ class LessonAdmin(ScopedAdmin):
 class ChangeAdmin(ScopedAdmin):
     list_display = ['id','target_date','kind','original','room','status','created_by']
     list_filter = ['status','kind','target_date']
-    readonly_fields = ['status','created_by','created_at','published_at','room_overlap_approvals']
+    readonly_fields = ['status','created_by','created_at','published_at','room_overlap_approvals','teacher_overlap_approvals']
     actions = ['publish','withdraw']
     def has_change_permission(self,request,obj=None):
         return request.user.is_staff and (not obj or obj.status=='draft')
@@ -316,6 +316,7 @@ class ImageUploadForm(forms.Form):
 class ImageRowForm(forms.Form):
     use=forms.BooleanField(label='Проверено',required=False)
     allow_room_overlap=forms.BooleanField(label='Оставить пересечение кабинета',required=False)
+    allow_teacher_overlap=forms.BooleanField(label='Оставить пересечение преподавателя',required=False)
     group=forms.ModelChoiceField(StudentGroup.objects.all(),required=False,label='Группа')
     subgroup=forms.ModelChoiceField(Subgroup.objects.select_related('group'),required=False,label='Подгруппа')
     slot=forms.IntegerField(min_value=1,max_value=7,required=False,label='Пара')
@@ -433,6 +434,7 @@ class ImageAdmin(SafeAdmin):
             picked=lambda field:suggestions[field+'_id'] if fresh else row.get(field+'_id') or suggestions[field+'_id']
             initial.append({'group':row.get('group_id'),'subgroup':row.get('subgroup_id'),'slot':row.get('slot'),
                 'allow_room_overlap':row.get('allow_room_overlap',False),
+                'allow_teacher_overlap':row.get('allow_teacher_overlap',False),
                 'kind':row.get('kind','replace'),'subject':picked('subject'),
                 'teacher':picked('teacher'),'room':picked('room')})
         FormSet=formset_factory(ImageRowForm,extra=3,max_num=250,validate_max=True,can_delete=True)
@@ -449,6 +451,7 @@ class ImageAdmin(SafeAdmin):
                         continue
                     rows.append({'group_id':d['group'].pk,'slot':d['slot'],'kind':d['kind'],'review_row':index+1,
                         'allow_room_overlap':d.get('allow_room_overlap',False),
+                        'allow_teacher_overlap':d.get('allow_teacher_overlap',False),
                         'subgroup_id':d['subgroup'].pk if d.get('subgroup') else None,
                         **{key+'_id':d[key].pk if d.get(key) else None for key in ['subject','teacher','room']}})
                 try:
@@ -472,6 +475,7 @@ class ImageAdmin(SafeAdmin):
                     'counterpart':conflict['other_text'] if own_first else conflict['lesson_text'],
                     'counterpart_row':conflict['second_row'] if own_first else conflict['first_row']})
             row['room_conflicts']=any(c['room_conflict'] for c in row['conflicts'])
+            row['teacher_conflicts']=any(c['teacher_conflict'] for c in row['conflicts'])
             items.append((form,previews[i] if i<len(previews) else '',row))
         return render(request,'admin/image_review.html',dict(self.admin_site.each_context(request),title='Проверка замен',
             batch=batch,formset=formset,items=items,review_conflicts=review_conflicts,review_week=services.week_info(batch.target_date)))

@@ -351,6 +351,7 @@ class Change(models.Model):
     whole_group = models.BooleanField('Снять деление на подгруппы', default=False)
     reason = models.TextField('Причина', blank=True)
     room_overlap_approvals = models.JSONField('Разрешённые пересечения кабинета',default=list,blank=True,editable=False)
+    teacher_overlap_approvals = models.JSONField('Разрешённые пересечения преподавателя',default=list,blank=True,editable=False)
     status = models.CharField('Статус', max_length=12, choices=[('draft', 'Черновик'), ('published', 'Опубликовано'), ('withdrawn', 'Отменено')], default='draft')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, verbose_name='Автор')
     created_at = models.DateTimeField(auto_now_add=True)

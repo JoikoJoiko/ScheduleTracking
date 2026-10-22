@@ -1,0 +1,6 @@
+<div class="review-row-conflict {% if conflict.allowed %}overlap-allowed{% endif %}">
+    <strong>{{ conflict.type }} · {{ conflict.start }}–{{ conflict.end }}</strong>
+    {% if conflict.counterpart_row %}<a href="#review-row-{{ conflict.counterpart_row }}">Со строкой {{ conflict.counterpart_row }}</a>{% endif %}
+    <p>{{ conflict.counterpart }}</p>
+    {% if conflict.allowed %}<small>{% if conflict.teacher_conflict %}Пересечение преподавателя разрешено{% else %}Пересечение кабинета разрешено{% endif %}</small>{% endif %}
+</div>

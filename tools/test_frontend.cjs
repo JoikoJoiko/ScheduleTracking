@@ -116,10 +116,11 @@ function reviewPage(values) {
     const controls={'[data-review-select-all]':selectAll,'[data-review-remove-empty]':removeEmpty,'[data-review-status]':status};
     const form={querySelector:selector=>controls[selector]};
     const rows=values.map((values,index)=>{
-        const fields=Object.fromEntries(['use','DELETE','allow_room_overlap','group','subgroup','slot','kind','subject','teacher','room']
+        const fields=Object.fromEntries(['use','DELETE','allow_room_overlap','allow_teacher_overlap','group','subgroup','slot','kind','subject','teacher','room']
             .map(name=>[name,control(values[name] ?? (name==='kind'?'replace':''))]));
         fields.use.checked=!!values.checked;
         fields.allow_room_overlap.checked=!!values.allow_room_overlap;
+        fields.allow_teacher_overlap.checked=!!values.allow_teacher_overlap;
         fields.group.name=`form-${index}-group`;
         const row={fields,dataset:{hasSource:values.source?'1':''},hidden:false,
             querySelector(selector){return selector==='.candidate-status'?control():fields[selector.match(/-([A-Za-z_]+)"/)[1]];}};
@@ -167,19 +168,27 @@ test('bulk controls react to manual selection and become disabled when no active
     assert.match(p.status.textContent,/0 из 0/);
 });
 
-test('bulk selection never approves room conflicts and editing a row clears its approval',()=>{
+test('bulk selection never approves overlaps and editing a row clears both decisions',()=>{
     const p=reviewPage([{group:'1',room:'2'},{source:true}]);
     p.selectAll.events.click();
     assert.ok(p.rows.every(row=>row.fields.use.checked));
     assert.ok(p.rows.every(row=>!row.fields.allow_room_overlap.checked));
+    assert.ok(p.rows.every(row=>!row.fields.allow_teacher_overlap.checked));
     p.rows[0].fields.allow_room_overlap.checked=true;
+    p.rows[0].fields.allow_teacher_overlap.checked=true;
     p.events.change({target:p.rows[0].fields.use});
+    assert.equal(p.rows[0].fields.allow_room_overlap.checked,true);
+    assert.equal(p.rows[0].fields.allow_teacher_overlap.checked,true);
+    p.events.change({target:p.rows[0].fields.allow_teacher_overlap});
     assert.equal(p.rows[0].fields.allow_room_overlap.checked,true);
     p.events.change({target:p.rows[0].fields.room});
     assert.equal(p.rows[0].fields.allow_room_overlap.checked,false);
+    assert.equal(p.rows[0].fields.allow_teacher_overlap.checked,false);
     p.rows[0].fields.allow_room_overlap.checked=true;
+    p.rows[0].fields.allow_teacher_overlap.checked=true;
     p.events.input({target:p.rows[0].fields.slot});
     assert.equal(p.rows[0].fields.allow_room_overlap.checked,false);
+    assert.equal(p.rows[0].fields.allow_teacher_overlap.checked,false);
 });
 
 const regularBells=()=>[
