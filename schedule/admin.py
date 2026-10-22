@@ -421,12 +421,20 @@ class ImageAdmin(SafeAdmin):
                 group=StudentGroup.objects.filter(pk=group_id).first()
                 dictionaries[group_id]=curriculum_for(group,batch.target_date) if group else None
             suggestions=infer_row(group_id,batch.target_date,row,dictionaries[group_id],base)
+            fresh=batch.status=='review' and bool(row.get('raw') or row.get('raw_variants') or row.get('source_box'))
             # Older pending uploads also show when newly completed fields are inferred.
-            previews_rows.append(row if 'inferred' in row else {**row,**{key:suggestions[key] for key in ['inferred','confidence','inferences']}})
+            preview={**row,**{key:suggestions[key] for key in ['inferred','confidence','inferences']}} if fresh or 'inferred' not in row else row
+            if fresh:
+                group_notes=[note for note in row.get('inferences',[]) if note.startswith('Группа:')]
+                if group_notes:
+                    preview['inferences']=group_notes+list(preview['inferences'])
+                    preview['inferred']=True;preview['confidence']=min(preview['confidence'],80)
+            previews_rows.append(preview)
+            picked=lambda field:suggestions[field+'_id'] if fresh else row.get(field+'_id') or suggestions[field+'_id']
             initial.append({'group':row.get('group_id'),'subgroup':row.get('subgroup_id'),'slot':row.get('slot'),
                 'allow_room_overlap':row.get('allow_room_overlap',False),
-                'kind':row.get('kind','replace'),'subject':row.get('subject_id') or suggestions['subject_id'],
-                'teacher':row.get('teacher_id') or suggestions['teacher_id'],'room':row.get('room_id') or suggestions['room_id']})
+                'kind':row.get('kind','replace'),'subject':picked('subject'),
+                'teacher':picked('teacher'),'room':picked('room')})
         FormSet=formset_factory(ImageRowForm,extra=3,max_num=250,validate_max=True,can_delete=True)
         formset=FormSet(request.POST or None,initial=initial,form_kwargs={'target_date':batch.target_date})
         if request.method=='POST' and batch.status=='review':
@@ -466,4 +474,4 @@ class ImageAdmin(SafeAdmin):
             row['room_conflicts']=any(c['room_conflict'] for c in row['conflicts'])
             items.append((form,previews[i] if i<len(previews) else '',row))
         return render(request,'admin/image_review.html',dict(self.admin_site.each_context(request),title='Проверка замен',
-            batch=batch,formset=formset,items=items,review_conflicts=review_conflicts))
+            batch=batch,formset=formset,items=items,review_conflicts=review_conflicts,review_week=services.week_info(batch.target_date)))

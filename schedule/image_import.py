@@ -18,6 +18,8 @@ from .models import ImageImport,StudentGroup,Teacher,Subject,Room,TimeSlot,Chang
 from .college_import import teacher_name
 from . import services as svc
 from .curriculum import curriculum_for
+from .room_matching import room_proposal
+from .timing import week_info
 
 MAX_IMAGE_BYTES=10*1024*1024
 
@@ -231,7 +233,7 @@ def abbreviation_score(value,name,short=''):
 def infer_row(group_id,day,row,curriculum=None,base_lessons=None):
     """Rank review proposals in the group's dictionary; never invent catalog records."""
     result={'subject_id':None,'teacher_id':None,'room_id':None,'subgroup_id':None,
-            'inferred':False,'confidence':0,'inferences':[]}
+            'inferred':False,'confidence':0,'inferences':[],'week':week_info(day)}
     group=StudentGroup.objects.filter(pk=group_id).first() if group_id else None
     if group is None:
         result['inferences']=['Группа не найдена в загруженном расписании']
@@ -288,28 +290,12 @@ def infer_row(group_id,day,row,curriculum=None,base_lessons=None):
                 teacher_value=.55
                 result['inferences'].append('Преподаватель: по выбранной дисциплине группы')
             result['teacher_id']=teacher['id'];scores.append(teacher_value)
-    rooms=list(Room.objects.select_related('building'))
-    room_texts=[row.get('room_text','')]+[d['room_text'] for text in texts if (d:=decode_cell(text))]
-    room_ranks=[]
-    for room in rooms:
-        score=max((SequenceMatcher(None,normalized(text),normalized(room.number)).ratio() for text in room_texts if text),default=0)
-        if room.building_id==group.building_id:
-            score+=.01
-        room_ranks.append((score,room))
-    room_ranks.sort(key=lambda x:(-x[0],x[1].pk))
-    if room_ranks and room_ranks[0][0]>=.7:
-        score,room=room_ranks[0];result['room_id']=room.pk;scores.append(min(1,score))
-        if score<.95:
-            result['inferences'].append('Кабинет: ближайшее обозначение из справочника')
-    else:
-        # Omitted rooms first inherit the original pair, then the subject's usual room.
-        room_ids={l['room_id'] for l in originals}
-        if len(room_ids)!=1 and data['version'] and result['subject_id']:
-            room_ids=set(Lesson.objects.filter(version_id=data['version']['id'],participants__group=group,
-                subject_id=result['subject_id'],teacher_id=result['teacher_id']).values_list('room_id',flat=True))
-        if room_ids:
-            result['room_id']=sorted(room_ids)[0];scores.append(.5)
-            result['inferences'].append('Кабинет: из расписания, на изображении не разобран')
+    decoded=[d for text in texts if (d:=decode_cell(text))]
+    proposal=room_proposal(group,day,row,decoded,originals,data,result['subject_id'],result['teacher_id'],
+                          bool(subjects and subjects[0][0]>=.65) or bool(recognizable_teacher))
+    result['room_id']=proposal['room_id'];result['room_candidates']=proposal['candidates']
+    result['room_confidence']=round(proposal['confidence']*100)
+    scores.append(proposal['confidence']);result['inferences'].extend(proposal['notes'])
     if not data['subjects']:
         result['inferences'].append('У группы нет списка дисциплин на этот период')
     result['inferred']=bool(result['inferences'])
@@ -411,7 +397,8 @@ def proposal_quality(row,dictionary):
     teacher=next((t for t in dictionary.get('teachers',[]) if t['id']==row.get('teacher_id')),None)
     subject_match=max((subject_score(d['subject_text'],subject['name']) for d in decoded),default=0) if subject else 0
     teacher_match=max((teacher_score(d['teacher_text'],teacher['name']) for d in decoded),default=0) if teacher else 0
-    return (sum(bool(row.get(f+'_id')) for f in ['subject','teacher','room']),subject_match+teacher_match,row.get('confidence',0))
+    return (sum(bool(row.get(f+'_id')) for f in ['subject','teacher','room']),subject_match+teacher_match,
+            row.get('room_confidence',0),row.get('confidence',0))
 
 
 def analyze(image,layout,target_date=None):

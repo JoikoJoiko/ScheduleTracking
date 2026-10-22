@@ -141,6 +141,7 @@ def image_candidates(request):
     row={key+'_text':request.GET.get(key,'')[:300] for key in ['subject','teacher','room']}
     row['slot']=int(request.GET['slot']) if request.GET.get('slot','').isdigit() else None
     result['suggestions']=infer_row(group.pk,day,row,result)
+    result['week']=week_info(day)
     return JsonResponse(result,json_dumps_params={'ensure_ascii':False})
 
 

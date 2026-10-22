@@ -23,6 +23,10 @@ class BellRowForm(forms.Form):
         if data.get('override') and (not data.get('start') or not data.get('end') or data['start']>=data['end']):
             raise ValidationError('Укажите начало и окончание пары')
         return data
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.fields['start'].widget.attrs['data-bell-start']=''
+        self.fields['end'].widget.attrs['data-bell-end']=''
 
 
 class CuratorForm(forms.Form):
@@ -131,6 +135,21 @@ def bells_editor(request,site):
         curator_initial.update({prefix+'_start':bell.start_time,prefix+'_end':bell.end_time})
     curator_form=CuratorForm(request.POST if action=='curator' else None,initial=curator_initial)
     formset=RowSet(request.POST if action=='weekday' else None,initial=initial,slots=slots,weekday=weekday)
+    bell_rows=[]
+    for i,(form,slot) in enumerate(zip(formset,slots)):
+        # Preserve already configured long breaks; blank means the 10-minute default.
+        pause=None
+        if i+1<len(formset.forms):
+            try:
+                start=forms.TimeField(required=False).clean(formset.forms[i+1]['start'].value())
+                end=forms.TimeField(required=False).clean(form['end'].value())
+            except ValidationError:
+                start=end=None
+            if start and end:
+                minutes=max(0,(start.hour*60+start.minute)-(end.hour*60+end.minute))
+                pause=minutes if minutes!=10 else None
+        form.bell_pause=pause
+        bell_rows.append((form,slot))
     rule_id=request.POST.get('rule_id') or request.GET.get('short')
     rule=get_object_or_404(ShortenedDay,pk=rule_id) if rule_id else None
     copy_from=get_object_or_404(ShortenedDay,pk=request.GET['copy']) if request.GET.get('copy') and not rule else None
@@ -209,7 +228,7 @@ def bells_editor(request,site):
             'start':regular[s.pk][0].isoformat(timespec='minutes') if regular[s.pk][0] else None,
             'end':regular[s.pk][1].isoformat(timespec='minutes') if regular[s.pk][1] else None} for s in short_slots]})
     return render(request,'admin/bells_editor.html',dict(site.each_context(request),title='Звонки',
-        weekday=weekday,weekdays=WEEKDAYS[:6],bell_rows=list(zip(formset,slots)),formset=formset,curator_form=curator_form,
+        weekday=weekday,weekdays=WEEKDAYS[:6],bell_rows=bell_rows,formset=formset,curator_form=curator_form,
         short_form=short_form,short_set=short_set,short_rows=list(zip(short_set,short_slots)),short_base_times=base_times,
         rule=rule,copy_from=copy_from,preview=preview,short_days=ShortenedDay.objects.order_by('-date')))
 

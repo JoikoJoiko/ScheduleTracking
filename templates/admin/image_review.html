@@ -1,6 +1,6 @@
 {% extends "admin/base_site.html" %}{% load static %}
 {% block extrahead %}{{ block.super }}<script src="{% static 'admin-image-review.js' %}?v={{ site_version }}" defer></script>{% endblock %}
-{% block content %}<p>{{ batch.target_date }} · {{ batch.get_layout_display }} · {{ batch.get_status_display }}</p>
+{% block content %}<p>{{ batch.target_date|date:'d.m.Y · l' }} · <strong class="review-week">{{ review_week.label }}</strong> · {{ batch.get_layout_display }} · {{ batch.get_status_display }}</p>
 {% if batch.status == 'review' %}<form method="post" class="image-reanalyze">{% csrf_token %}<button name="reanalyze" value="1">Распознать повторно</button><small>Несохранённые правки в полях будут сброшены</small></form>{% endif %}
 {% for warning in batch.warnings %}<div class="image-warnings">{{ warning }}</div>{% endfor %}
 {% if review_conflicts %}<section class="review-conflict-summary" role="alert"><h2>Проверьте пересечения</h2><ul>{% for conflict in review_conflicts %}<li>{% for number in conflict.rows %}<a href="#review-row-{{ number }}">Строка {{ number }}</a>{% if not forloop.last %} ↔ {% endif %}{% empty %}Расписание{% endfor %} · {{ conflict.type }}{% if conflict.room_conflict %} · кабинет {{ conflict.lesson.room }}{% endif %} · {{ conflict.start }}–{{ conflict.end }}{% if conflict.allowed %} · разрешено{% endif %}</li>{% endfor %}</ul></section>{% endif %}

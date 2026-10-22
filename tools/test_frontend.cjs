@@ -5,6 +5,7 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const source=fs.readFileSync('static/app.js','utf8');
 const {calculateShortDay}=require('../static/short-day.js');
+const {cascadeBells,initBellEditor}=require('../static/bell-editor.js');
 
 function page() {
     const events={},requests=[],history=[],intervals=[];
@@ -179,4 +180,65 @@ test('bulk selection never approves room conflicts and editing a row clears its 
     p.rows[0].fields.allow_room_overlap.checked=true;
     p.events.input({target:p.rows[0].fields.slot});
     assert.equal(p.rows[0].fields.allow_room_overlap.checked,false);
+});
+
+const regularBells=()=>[
+    {start:'09:00',end:'10:30',breakAfter:''},{start:'10:40',end:'12:10',breakAfter:''},
+    {start:'12:20',end:'13:50',breakAfter:''},{start:'14:00',end:'15:30',breakAfter:''}];
+
+test('moving the first bell to 08:00 fills 90-minute pairs and 10-minute breaks',()=>{
+    const rows=regularBells();rows[0].start='08:00';
+    const result=cascadeBells({rows,from:0,field:'start',duration:90,pause:10});
+    assert.deepEqual(result.map(r=>[r.start,r.end]),[['08:00','09:30'],['09:40','11:10'],['11:20','12:50'],['13:00','14:30']]);
+    assert.equal(rows[0].end,'10:30');
+});
+
+test('moving the third pair preserves earlier times and records its preceding long break',()=>{
+    const rows=regularBells();rows[2].start='13:00';
+    const result=cascadeBells({rows,from:2,field:'start',duration:90,pause:10});
+    assert.deepEqual(result.slice(0,2).map(r=>[r.start,r.end]),rows.slice(0,2).map(r=>[r.start,r.end]));
+    assert.equal(result[1].breakAfter,50);
+    assert.deepEqual(result.slice(2).map(r=>[r.start,r.end]),[['13:00','14:30'],['14:40','16:10']]);
+});
+
+test('editing a break or end time moves only subsequent pairs and keeps other custom breaks',()=>{
+    const rows=regularBells();rows[1].breakAfter=30;
+    const result=cascadeBells({rows,from:1,field:'break',duration:90,pause:10});
+    assert.deepEqual(result.slice(0,2),rows.slice(0,2));assert.equal(result[2].start,'12:40');
+    rows[1].end='12:30';
+    const changed=cascadeBells({rows,from:1,field:'end',duration:90,pause:10});
+    assert.equal(changed[1].start,'10:40');assert.equal(changed[1].end,'12:30');
+    assert.equal(changed[2].start,'13:00');
+    rows[0].start='08:00';
+    assert.equal(cascadeBells({rows,from:0,field:'start',duration:90,pause:10})[2].start,'11:40');
+});
+
+test('bell cascade rejects overlap and midnight overflow without mutating the scheme',()=>{
+    const rows=regularBells();rows[2].start='11:00';
+    assert.throws(()=>cascadeBells({rows,from:2,field:'start',duration:90,pause:10}),/предыдущей/);
+    rows[0].start='23:00';const snapshot=JSON.stringify(rows);
+    assert.throws(()=>cascadeBells({rows,from:0,field:'start',duration:90,pause:10}),/тот же день/);
+    assert.equal(JSON.stringify(rows),snapshot);
+    rows[0].end='';
+    assert.throws(()=>cascadeBells({rows,from:0,field:'break',duration:90,pause:10}),/предыдущей пары/);
+});
+
+test('bell editor applies forward overrides and supports manual mode without auto-saving',()=>{
+    const input=value=>({value,checked:false,events:{},addEventListener(name,fn){this.events[name]=fn;}});
+    const rows=regularBells().map(values=>{
+        const fields={start:input(values.start),end:input(values.end),break:input(values.breakAfter),override:input('')};
+        return {fields,querySelector(selector){return fields[selector==='input[type=checkbox]'?'override':selector.match(/bell-(\w+)/)[1]];}};
+    });
+    const auto=input('');auto.checked=true;
+    const controls={'[data-bell-auto]':auto,'[data-bell-duration]':input('90'),'[data-bell-pause]':input('10'),'[data-bell-status]':{textContent:''}};
+    initBellEditor({querySelectorAll:()=>rows,querySelector:selector=>controls[selector]});
+    rows[0].fields.start.value='08:00';rows[0].fields.start.events.input();
+    assert.equal(rows[2].fields.start.value,'11:20');assert.ok(rows.every(row=>row.fields.override.checked));
+    rows[0].fields.override.checked=false;rows[1].fields.override.checked=false;
+    rows[2].fields.start.value='12:00';rows[2].fields.start.events.input();
+    assert.equal(rows[0].fields.override.checked,false);assert.equal(rows[1].fields.override.checked,false);
+    assert.equal(rows[3].fields.start.value,'13:40');
+    auto.checked=false;
+    rows[2].fields.start.value='13:00';rows[2].fields.start.events.input();
+    assert.equal(rows[3].fields.start.value,'13:40');
 });

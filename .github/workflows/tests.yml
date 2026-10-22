@@ -22,6 +22,7 @@ jobs:
       - run: node --check static/admin-dashboard.js
       - run: node --check static/admin-image-review.js
       - run: node --check static/admin-operations.js
+      - run: node --check static/bell-editor.js
       - run: node --check static/admin-selects.js
       - run: node --check static/short-day.js
       - run: node --test tools/test_frontend.cjs
