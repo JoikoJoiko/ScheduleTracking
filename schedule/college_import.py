@@ -148,8 +148,11 @@ def materialize(rows,metadata,period):
         subgroup=Subgroup.objects.get_or_create(group=group,name=row['subgroup'])[0] if row['subgroup'] else None
         room=Room.objects.get_or_create(building=building,number=row['room'],defaults={'room_type':room_type})[0]
         teacher=Teacher.objects.get_or_create(name=row['teacher'])[0]
-        subject=Subject.objects.get_or_create(name=row['subject'])[0]
+        curricular=row['slot']!=0
+        subject=Subject.objects.get_or_create(name=row['subject'],defaults={'is_curricular':curricular})[0]
+        if not curricular and subject.is_curricular:
+            subject.is_curricular=False;subject.save(update_fields=['is_curricular'])
         payload.append({'day_of_week':row['day_of_week'],'time_slot_id':slot.pk,'group_id':group.pk,
             'subgroup_id':subgroup.pk if subgroup else None,'room_id':room.pk,'teacher_id':teacher.pk,
-            'subject_id':subject.pk,'week_type':row['week_type'],'lesson_type':'','start_time':None,'end_time':None})
+            'subject_id':subject.pk,'week_type':row['week_type'],'lesson_type':'' if curricular else 'class_hour','start_time':None,'end_time':None})
     return payload

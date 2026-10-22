@@ -29,7 +29,7 @@ def curriculum_for(group, day, period=None):
         return result
     result['version'] = {'id': version.pk, 'start': version.effective_from.isoformat(), 'end': version.effective_to.isoformat()}
     subjects, teachers = {}, {}
-    for lesson in version.lessons.filter(participants__group=group).select_related('subject','teacher').distinct():
+    for lesson in version.lessons.filter(participants__group=group,subject__is_curricular=True).select_related('subject','teacher').distinct():
         item = subjects.setdefault(lesson.subject_id, {'id': lesson.subject_id, 'name': lesson.subject.name,
             'short_name': lesson.subject.short_name, 'teachers': {}, 'weeks': set()})
         teacher = {'id': lesson.teacher_id, 'name': lesson.teacher.name}

@@ -1,0 +1,2 @@
+{% extends "admin/base_site.html" %}
+{% block content %}<div class="operations-intro"><p>Справочники, пользователи и точечное редактирование данных.</p><a class="button" href="{% url 'admin:index' %}">← Рабочая панель</a></div>{% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}{% endblock %}

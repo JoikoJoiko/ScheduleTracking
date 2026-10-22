@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Q
 from django.core.validators import MinValueValidator, MaxValueValidator
 
 
@@ -129,6 +130,7 @@ class Subgroup(Named):
 
 class Subject(Named):
     short_name = models.CharField('Сокращение', max_length=80, blank=True)
+    is_curricular = models.BooleanField('Учебная дисциплина', default=True)
     class Meta(Named.Meta):
         verbose_name = 'Дисциплина'
         verbose_name_plural = 'Дисциплины'
@@ -167,6 +169,52 @@ class WeekdayBell(models.Model):
         constraints = [models.UniqueConstraint(fields=['day_of_week', 'time_slot'], name='weekday_bell_unique')]
         verbose_name = 'Звонки по дню недели'
         verbose_name_plural = 'Звонки по дням недели'
+
+
+class ShortenedDay(models.Model):
+    date = models.DateField('Дата', unique=True)
+    lesson_minutes = models.PositiveSmallIntegerField('Длительность пары, минут', validators=[MinValueValidator(1), MaxValueValidator(180)])
+    start_time = models.TimeField('Начало первой пары', null=True, blank=True)
+    keep_breaks = models.BooleanField('Сохранить обычные перемены', default=True)
+    break_minutes = models.PositiveSmallIntegerField('Перемена, минут', null=True, blank=True, validators=[MaxValueValidator(120)])
+    is_active = models.BooleanField('Действует', default=True)
+    note = models.CharField('Примечание', max_length=240, blank=True)
+    def clean(self):
+        if not self.keep_breaks and self.break_minutes is None:
+            raise ValidationError({'break_minutes':'Укажите длительность перемены'})
+        if self.date and self.date.weekday()==6:
+            raise ValidationError({'date':'Выберите учебный день с понедельника по субботу'})
+        if self.date and self.lesson_minutes:
+            from .timing import shortened_times, regular_bell_times
+            shortened_times(self.date,regular_bell_times(self.date),self)
+    def __str__(self):
+        return f'{self.date:%d.%m.%Y} · {self.lesson_minutes} мин'
+    class Meta:
+        ordering=['date']
+        verbose_name='Сокращённый день'
+        verbose_name_plural='Сокращённые дни'
+
+
+class PracticePeriod(models.Model):
+    group = models.ForeignKey(StudentGroup,on_delete=models.PROTECT,verbose_name='Группа')
+    start_date = models.DateField('С')
+    end_date = models.DateField('По (включительно)')
+    title = models.CharField('Название',max_length=240,default='Практика')
+    organization = models.CharField('Место практики',max_length=240,blank=True)
+    is_active = models.BooleanField('Действует',default=True)
+    def clean(self):
+        if self.start_date and self.end_date:
+            if self.start_date>self.end_date:
+                raise ValidationError('Окончание практики раньше начала')
+            if self.is_active and self.group_id and PracticePeriod.objects.exclude(pk=self.pk).filter(
+                group_id=self.group_id,is_active=True,start_date__lte=self.end_date,end_date__gte=self.start_date).exists():
+                raise ValidationError('У группы уже есть практика в этом диапазоне дат')
+    def __str__(self):
+        return f'{self.group} · {self.start_date:%d.%m}–{self.end_date:%d.%m.%Y}'
+    class Meta:
+        ordering=['-start_date','group__name']
+        verbose_name='Практика группы'
+        verbose_name_plural='Практики групп'
 
 
 class ScheduleVersion(Named):
@@ -252,6 +300,7 @@ class Change(models.Model):
     room = models.ForeignKey(Room, on_delete=models.PROTECT, null=True, blank=True, verbose_name='Новая аудитория')
     group = models.ForeignKey(StudentGroup, on_delete=models.PROTECT, null=True, blank=True, verbose_name='Новая группа')
     target_group = models.ForeignKey(StudentGroup, on_delete=models.PROTECT, null=True, blank=True, related_name='targeted_changes', verbose_name='Только для группы')
+    target_subgroup = models.ForeignKey(Subgroup,on_delete=models.PROTECT,null=True,blank=True,related_name='targeted_changes',verbose_name='Только для подгруппы')
     subgroup = models.ForeignKey(Subgroup, on_delete=models.PROTECT, null=True, blank=True, verbose_name='Новая подгруппа')
     whole_group = models.BooleanField('Снять деление на подгруппы', default=False)
     reason = models.TextField('Причина', blank=True)
@@ -264,6 +313,14 @@ class Change(models.Model):
             raise ValidationError('Выберите исходное занятие')
         if self.target_group_id and (not self.original_id or not self.original.participants.filter(group_id=self.target_group_id).exists()):
             raise ValidationError('Выбранная группа не участвует в исходном занятии')
+        if self.target_subgroup_id:
+            if not self.target_group_id or self.target_subgroup.group_id!=self.target_group_id:
+                raise ValidationError('Укажите группу выбранной исходной подгруппы')
+            participants=self.original.participants.filter(group_id=self.target_group_id) if self.original_id else Participant.objects.none()
+            if not participants.filter(Q(subgroup_id=self.target_subgroup_id)|Q(subgroup__isnull=True)).exists():
+                raise ValidationError('Подгруппа не участвует в исходном занятии')
+            if participants.filter(subgroup__isnull=True).exists() and not Subgroup.objects.filter(group_id=self.target_group_id).exclude(pk=self.target_subgroup_id).exists():
+                raise ValidationError('Сначала добавьте остальные подгруппы группы в справочник')
         if self.kind == 'add' and (self.original_id or not all([self.time_slot_id, self.subject_id, self.teacher_id, self.room_id, self.group_id])):
             raise ValidationError('Для дополнительного занятия нужны пара, дисциплина, преподаватель, аудитория и группа; исходное занятие не указывается')
         if self.kind == 'move' and not self.new_date:

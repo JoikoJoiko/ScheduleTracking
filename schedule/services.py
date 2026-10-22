@@ -37,6 +37,7 @@ def lesson_dict(lesson, date, times=None):
         'start': start.isoformat(timespec='minutes') if start else None,
         'end': end.isoformat(timespec='minutes') if end else None,
         'time_label':lesson.time_slot.name,
+        'event_kind':'lesson' if lesson.subject.is_curricular else 'class_hour',
         'subject_id': lesson.subject_id, 'subject': lesson.subject.name, 'teacher_id': lesson.teacher_id,
         'teacher': lesson.teacher.name, 'room_id': lesson.room_id, 'room': lesson.room.number,
         'building_id': lesson.room.building_id, 'building': lesson.room.building.name,
@@ -89,6 +90,8 @@ def apply_change(change, base):
         if obj:
             result[field + '_id'] = obj.pk
             result[field] = obj.number if field == 'room' else obj.name
+            if field=='subject':
+                result['event_kind']='lesson' if obj.is_curricular else 'class_hour'
             if field == 'room':
                 result.update(building_id=obj.building_id, building=obj.building.name)
     if change.time_slot or (change.kind=='move' and change.original_id):
@@ -108,6 +111,26 @@ def apply_change(change, base):
         for group in result['groups']:
             group.update(subgroup_id=change.subgroup_id, subgroup=change.subgroup.name if change.subgroup else '')
     return result
+
+
+def split_change_target(lesson,change):
+    """Separate the affected participants without losing a joint lesson or the other subgroup."""
+    selected=deepcopy(lesson);selected['groups']=[]
+    remaining=deepcopy(lesson);remaining['groups']=[]
+    for participant in lesson['groups']:
+        if participant['id']!=change.target_group_id:
+            remaining['groups'].append(participant);continue
+        if not change.target_subgroup_id:
+            selected['groups'].append(participant);continue
+        if participant['subgroup_id']==change.target_subgroup_id:
+            selected['groups'].append(participant)
+        elif participant['subgroup_id']:
+            remaining['groups'].append(participant)
+        else:
+            for subgroup in Subgroup.objects.filter(group_id=participant['id']):
+                target=selected if subgroup.pk==change.target_subgroup_id else remaining
+                target['groups'].append({**participant,'subgroup_id':subgroup.pk,'subgroup':subgroup.name})
+    return selected,remaining
 
 
 def schedule_on(date, preview=None, version=None, omit_change=None):
@@ -133,7 +156,7 @@ def schedule_on(date, preview=None, version=None, omit_change=None):
     # Latest published revision wins, including when a move changes destination twice.
     latest = {}
     for change in changes:
-        latest[(change.original_id, change.target_date,change.target_group_id) if change.original_id else ('add', change.pk)] = change
+        latest[(change.original_id, change.target_date,change.target_group_id,change.target_subgroup_id) if change.original_id else ('add', change.pk)] = change
     for change in sorted(latest.values(),key=lambda x:(x==preview,x.published_at or timezone.now(),x.pk or 0)):
         if change.target_date != date and change.new_date != date:
             continue
@@ -144,14 +167,13 @@ def schedule_on(date, preview=None, version=None, omit_change=None):
             if not base:
                 continue
             if change.target_group_id:
-                base=deepcopy(base)
-                base['groups']=[g for g in base['groups'] if g['id']==change.target_group_id]
+                base,_=split_change_target(base,change)
                 if not base['groups']:
                     continue
                 kept=[]
                 for item in lessons:
                     if item['id']==change.original_id and item['date']==change.target_date.isoformat():
-                        item['groups']=[g for g in item['groups'] if g['id']!=change.target_group_id]
+                        _,item=split_change_target(item,change)
                         if item['groups']:kept.append(item)
                     else:kept.append(item)
                 lessons=kept
@@ -164,7 +186,14 @@ def schedule_on(date, preview=None, version=None, omit_change=None):
             lessons.append(marker)
         if changed['date'] == date.isoformat():
             lessons.append(changed)
-    return sorted(lessons, key=lambda x: (x['start'] or '', x['slot'], x.get('id') or 0))
+    # Off-site practice suppresses only its group, preserving joint lessons for others.
+    away=set(PracticePeriod.objects.filter(is_active=True,start_date__lte=date,end_date__gte=date).values_list('group_id',flat=True))
+    result=[]
+    for lesson in lessons:
+        lesson['groups']=[g for g in lesson['groups'] if g['id'] not in away]
+        if lesson['groups']:
+            result.append(lesson)
+    return sorted(result, key=lambda x: (x['start'] or '', x['slot'], x.get('id') or 0))
 
 
 def live(lesson):
@@ -271,6 +300,10 @@ def publish_change(change, user):
     if change.original_id and not any(x['id'] == change.original_id for x in base_schedule(change.target_date)):
         raise ValidationError('Исходного занятия нет в актуальном расписании на эту дату')
     dates = {change.target_date, change.new_date or change.target_date}
+    group_ids=[change.target_group_id or change.group_id] if change.target_group_id or change.group_id else list(change.original.participants.values_list('group_id',flat=True))
+    for day in dates:
+        if PracticePeriod.objects.filter(group_id__in=group_ids,is_active=True,start_date__lte=day,end_date__gte=day).exists():
+            raise ValidationError('На эту дату у группы назначена практика')
     if change.original_id and change.new_date and not change.original.version.period.year.start_date <= change.new_date <= change.original.version.period.year.end_date:
         raise ValidationError('Перенос должен находиться в том же учебном году')
     for date in dates:
@@ -359,6 +392,25 @@ def free_intervals(lessons, date, room_id=None):
     if cursor < finish:
         gaps.append({'start':cursor.isoformat(timespec='minutes'), 'end':finish.isoformat(timespec='minutes')})
     return gaps
+
+
+def lesson_windows(lessons,date):
+    """A window is a vacant pair between lessons, never a scheduled break."""
+    active=[x for x in lessons if live(x) and x.get('start') and x.get('end') and x.get('slot',0)>0]
+    if len(active)<2:
+        return []
+    first,last=min(x['start'] for x in active),max(x['end'] for x in active)
+    times=bell_times(date)
+    result=[]
+    for slot in TimeSlot.objects.filter(sort_order__gt=0):
+        start,end=times.get(slot.pk,(None,None))
+        if not start or not end:
+            continue
+        start,end=start.isoformat(timespec='minutes'),end.isoformat(timespec='minutes')
+        if start<first or end>last or any(overlaps(start,end,x['start'],x['end']) for x in active):
+            continue
+        result.append({'slot':slot.sort_order,'start':start,'end':end})
+    return result
 
 
 def rollover_preview(source, target):

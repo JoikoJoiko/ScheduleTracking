@@ -193,7 +193,7 @@ class ScheduleTests(TestCase):
         for url in ['/','/groups','/teachers','/rooms','/changes',f'/groups/{self.group.pk}']:
             self.assertEqual(self.client.get(url).status_code,200,url)
         result=self.client.get(f'/api/groups/{self.group.pk}/schedule',{'date':str(self.day),'view':'week'}).json()
-        self.assertEqual(len(result['days']),7)
+        self.assertEqual(len(result['days']),6)
     def test_admin_api_requires_login_and_csrf(self):
         self.assertEqual(self.client.post('/api/admin/changes',data='{}',content_type='application/json').status_code,401)
         client=Client(enforce_csrf_checks=True);client.force_login(self.admin)

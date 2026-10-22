@@ -28,7 +28,8 @@ class DashboardTests(TestCase):
         html=response.content.decode()
         self.assertEqual(html.count('data-kind="schedule"'),4)
         self.assertIn('data-kind="changes"',html)
-        self.assertLess(html.index('Расписание по курсам'),html.index('Справочники и настройки'))
+        self.assertLess(html.index('Расписание по курсам'),html.index('Технические настройки и справочники'))
+        self.assertNotIn('dashboard-directories',html)
 
     def test_upload_parses_publishes_and_updates_status(self):
         response=self.upload()

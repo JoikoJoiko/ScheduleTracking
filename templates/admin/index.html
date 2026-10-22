@@ -1,6 +1,6 @@
 {% extends "admin/base_site.html" %}{% load static %}
-{% block extrastyle %}{{ block.super }}<link rel="stylesheet" href="{% static 'admin-dashboard.css' %}">{% endblock %}
-{% block extrahead %}{{ block.super }}<script src="{% static 'admin-dashboard.js' %}" defer></script>{% endblock %}
+{% block extrastyle %}{{ block.super }}<link rel="stylesheet" href="{% static 'admin-dashboard.css' %}?v={{ site_version }}">{% endblock %}
+{% block extrahead %}{{ block.super }}<script src="{% static 'admin-dashboard.js' %}?v={{ site_version }}" defer></script>{% endblock %}
 {% block coltype %}colM dashboard-page{% endblock %}
 {% block content_title %}{% endblock %}
 {% block sidebar %}{% endblock %}
@@ -34,9 +34,12 @@
       <div class="upload-feedback" role="status" aria-live="polite"><progress hidden max="100" aria-label="Обработка изображения"></progress><p class="upload-message"></p><ul class="upload-errors" hidden></ul><a class="upload-result-link" hidden>Проверить и опубликовать →</a></div>
     </form>
   </section>
+  {% if user.is_superuser %}<div class="dashboard-operation-grid">
+    <section class="dashboard-operation-card" aria-labelledby="bells-heading"><span class="dashboard-eyebrow">УЧЕБНЫЙ ДЕНЬ</span><div class="dashboard-section-head"><h2 id="bells-heading">Звонки по дням недели</h2><span class="course-number">◷</span></div><div class="dashboard-bells">{% for bell in today_bells %}<span><b>{{ bell.number }}</b> {{ bell.start }}–{{ bell.end }}</span>{% empty %}<span>Звонки ещё не заданы</span>{% endfor %}</div>{% for day in upcoming_short_days %}<p class="dashboard-muted">{{ day.date|date:'d.m' }} · сокращённые пары по {{ day.lesson_minutes }} мин</p>{% endfor %}<a class="dashboard-secondary" href="{% url 'admin:bells_editor' %}">Дни недели и сокращение звонков ↗</a></section>
+    <section class="dashboard-operation-card" aria-labelledby="practice-heading"><span class="dashboard-eyebrow">ПЕРИОДЫ БЕЗ ПАР</span><div class="dashboard-section-head"><h2 id="practice-heading">Практики групп</h2><span class="course-number">▧</span></div><div class="dashboard-practices">{% for practice in active_practices %}<p><strong>{{ practice.group.name }}</strong><span>{{ practice.start_date|date:'d.m' }} — {{ practice.end_date|date:'d.m.Y' }}</span></p>{% empty %}<p class="dashboard-muted">Практики ещё не добавлены</p>{% endfor %}</div><a class="dashboard-secondary" href="{% url 'admin:practices_editor' %}">Добавить или изменить практику ↗</a></section>
+  </div>{% endif %}
   <section class="dashboard-section" aria-labelledby="history-heading"><div class="dashboard-section-head"><h2 id="history-heading">Последние загрузки</h2><a href="{% url 'admin:schedule_importbatch_changelist' %}">Вся история ↗</a></div><div class="upload-history-table"><table><thead><tr><th>Файл</th><th>Дата</th><th>Статус</th><th></th></tr></thead><tbody id="upload-history">
     {% for record in upload_history %}<tr><td><span class="history-icon" aria-hidden="true">{% if record.kind == 'schedule' %}▦{% else %}⇄{% endif %}</span>{{ record.name }}</td><td>{{ record.date|date:'d.m H:i' }}</td><td><span class="history-state state-{{ record.state }}">{{ record.label }}</span></td><td><a href="{{ record.url }}">Открыть ↗</a></td></tr>{% empty %}<tr><td colspan="4" class="dashboard-muted">Загрузок пока нет</td></tr>{% endfor %}
   </tbody></table></div></section>
-  <div class="dashboard-quick-links"><a href="{% url 'admin:schedule_weekdaybell_changelist' %}">◷ Звонки по дням</a><a href="{% url 'admin:schedule_timeslot_changelist' %}">Общие звонки</a>{% if user.is_superuser and active_year %}<a href="{% url 'admin:schedule_academicyear_change' active_year.pk %}">▦ Отсчёт недель</a>{% endif %}<a href="/admin/conflicts/">◇ Конфликты</a>{% if user.is_superuser %}<a href="{% url 'admin:schedule_year_rollover' %}">Учебные годы</a>{% endif %}<a href="{% url 'admin:schedule_change_changelist' %}">⇄ Все замены</a></div>
-  <details class="dashboard-directories"><summary>Справочники и настройки</summary>{% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}</details>
+  <div class="dashboard-quick-links">{% if user.is_superuser and active_year %}<a href="{% url 'admin:schedule_academicyear_change' active_year.pk %}">▦ Отсчёт недель</a>{% endif %}<a href="/admin/conflicts/">◇ Конфликты</a>{% if user.is_superuser %}<a href="{% url 'admin:schedule_year_rollover' %}">Учебные годы</a>{% endif %}<a href="{% url 'admin:schedule_change_changelist' %}">⇄ Все замены</a>{% if user.is_superuser %}<a class="advanced-link" href="{% url 'admin:advanced_settings' %}">⚙ Технические настройки и справочники</a>{% endif %}</div>
 </div>{% endblock %}

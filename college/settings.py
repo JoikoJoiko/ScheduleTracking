@@ -4,6 +4,7 @@ from urllib.parse import urlparse, unquote
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+SITE_VERSION = (BASE_DIR/'VERSION').read_text(encoding='utf-8').strip()
 DEBUG = os.getenv('DEBUG', '1') == '1'
 DEPLOY_SCHEME = os.getenv('DEPLOY_SCHEME', 'https')
 if DEPLOY_SCHEME not in ('http', 'https'):
@@ -28,7 +29,7 @@ MIDDLEWARE = ['django.middleware.security.SecurityMiddleware', 'django.contrib.s
 ROOT_URLCONF = 'college.urls'
 TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIRS': [BASE_DIR / 'templates'],
               'APP_DIRS': True, 'OPTIONS': {'context_processors': ['django.template.context_processors.request',
-              'django.contrib.auth.context_processors.auth', 'django.contrib.messages.context_processors.messages']}}]
+              'django.contrib.auth.context_processors.auth', 'django.contrib.messages.context_processors.messages', 'college.context.release']}}]
 WSGI_APPLICATION = 'college.wsgi.application'
 DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'db.sqlite3', 'OPTIONS': {'timeout': 20}}}
 if os.getenv('DATABASE_URL'):

@@ -1,5 +1,6 @@
 {% extends "admin/base.html" %}{% load static %}
-{% block extrastyle %}{{ block.super }}<link rel="stylesheet" href="{% static 'admin-college.css' %}">{% endblock %}
-{% block extrahead %}{{ block.super }}<script>try{if(!localStorage.getItem('theme')){localStorage.setItem('theme','dark');document.documentElement.dataset.theme='dark'}}catch{}</script>{% endblock %}
+{% block extrastyle %}{{ block.super }}<link rel="stylesheet" href="{% static 'admin-college.css' %}?v={{ site_version }}">{% endblock %}
+{% block extrahead %}{{ block.super }}<script>try{if(!localStorage.getItem('theme')){localStorage.setItem('theme','dark');document.documentElement.dataset.theme='dark'}}catch{}</script><script src="{% static 'admin-selects.js' %}?v={{ site_version }}" defer></script>{% endblock %}
 {% block branding %}<h1 id="site-name"><a href="{% url 'admin:index' %}" class="admin-brand"><img src="{% static 'college-mark.svg' %}" alt=""><span>ЧПК<span class="admin-brand-subtitle">Управление расписанием</span></span></a></h1>{% endblock %}
 {% block nav-global %}<a href="/" style="margin-left:24px;color:inherit;font-size:12px">На сайт ↗</a>{% endblock %}
+{% block footer %}<footer class="admin-version">ScheduleTracking <span>v{{ site_version }}</span></footer>{% endblock %}

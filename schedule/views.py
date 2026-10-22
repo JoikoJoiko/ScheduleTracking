@@ -1,5 +1,6 @@
 import json
 import logging
+from django.conf import settings
 from datetime import date, datetime, time, timedelta
 from functools import wraps
 from django.core.exceptions import ValidationError, PermissionDenied
@@ -14,7 +15,7 @@ from django.utils import timezone
 from .models import *
 from . import services as svc
 from .importing import preview_import, confirm_import, import_report
-from .timing import week_info, bells_for, slot_times
+from .timing import week_info, bells_for, slot_times, short_day_info
 from .curriculum import curriculum_for, schedule_coverage
 
 
@@ -85,20 +86,23 @@ def meta(request):
     version=ScheduleVersion.objects.filter(status='published').order_by('-published_at').first()
     change=Change.objects.filter(status='published').order_by('-published_at').first()
     stamps=[x.published_at for x in [version,change] if x]
-    last_operation=AuditLog.objects.filter(action__in=['publish_version','publish_change','withdraw_change','rollback_version','activate_year']).first()
+    last_operation=AuditLog.objects.filter(action__in=['publish_version','publish_change','withdraw_change','rollback_version','activate_year',
+        'edit_bells','reset_bells','edit_short_day','disable_short_day','edit_practice','disable_practice']).first()
     if last_operation:
         stamps.append(last_operation.created_at)
     organization=SystemSetting.objects.filter(key='organization').values_list('value',flat=True).first() or 'Расписание колледжа'
-    return JsonResponse({'organization':organization,'today':timezone.localdate().isoformat(),'now':timezone.localtime().isoformat(),
+    return JsonResponse({'organization':organization,'version':settings.SITE_VERSION,'today':timezone.localdate().isoformat(),'now':timezone.localtime().isoformat(),
         'updated_at':max(stamps).isoformat() if stamps else None,
         'buildings':list(Building.objects.values('id','name')),
         'room_types':list(RoomType.objects.values('id','name')),
         'specialties':list(Specialty.objects.values('id','name','code')),
         'slots':bells_for(selected_date(request)),
+        'shortened_day':short_day_info(selected_date(request)),
         'week':week_info(selected_date(request)), 'current_week':week_info(timezone.localdate()),
         'periods':list(Period.objects.values('id','name','year_id','start_date','end_date').order_by('-start_date','end_date','-pk')),
         'years':list(AcademicYear.objects.values('id','name','status')),
-        'staff':request.user.is_active and request.user.is_staff})
+        'staff':request.user.is_active and request.user.is_staff,
+        'manage_bells':request.user.is_active and request.user.is_superuser})
 
 
 @api
@@ -106,10 +110,10 @@ def bells(request):
     day=selected_date(request)
     if request.GET.get('weekday'):
         weekday=int(request.GET['weekday'])
-        if weekday not in range(7):
-            raise ValidationError('День недели от 0 до 6')
+        if weekday not in range(6):
+            raise ValidationError('День недели от 0 до 5 (понедельник — суббота)')
         day=day-timedelta(days=day.weekday())+timedelta(days=weekday)
-    return JsonResponse({'date':day.isoformat(),'weekday':day.weekday(),'slots':bells_for(day),'week':week_info(day)})
+    return JsonResponse({'date':day.isoformat(),'weekday':day.weekday(),'slots':bells_for(day),'week':week_info(day),'shortened_day':short_day_info(day)})
 
 
 @api
@@ -127,12 +131,14 @@ def image_candidates(request):
     denied=staff(request)
     if denied:
         return denied
-    from .image_import import resolve_candidates
+    from .image_import import infer_row
     group=get_object_or_404(StudentGroup,pk=request.GET.get('group'))
     svc.require_buildings(request.user,[group.building_id])
     day=selected_date(request)
     result=curriculum_for(group,day)
-    result['suggestions']=resolve_candidates(group.pk,day,request.GET.get('subject','')[:300],request.GET.get('teacher','')[:300],result)
+    row={key+'_text':request.GET.get(key,'')[:300] for key in ['subject','teacher','room']}
+    row['slot']=int(request.GET['slot']) if request.GET.get('slot','').isdigit() else None
+    result['suggestions']=infer_row(group.pk,day,row,result)
     return JsonResponse(result,json_dumps_params={'ensure_ascii':False})
 
 
@@ -180,10 +186,10 @@ def schedule(request,kind,pk):
         raise Http404
     obj=get_object_or_404(model,pk=pk)
     date_=selected_date(request)
-    dates=[date_]
+    dates=[date_] if date_.weekday()<6 else []
     if request.GET.get('view')=='week':
         monday=date_-timedelta(days=date_.weekday())
-        dates=[monday+timedelta(days=i) for i in range(7)]
+        dates=[monday+timedelta(days=i) for i in range(6)]
     days=[]
     for day in dates:
         lessons=svc.schedule_on(day)
@@ -208,8 +214,17 @@ def schedule(request,kind,pk):
             if lesson['next']:
                 next_found=True
         coverage=schedule_coverage(kind,obj,day)
+        practice=PracticePeriod.objects.filter(group=obj,is_active=True,start_date__lte=day,end_date__gte=day).first() if kind=='groups' else None
+        practice_info=None
+        if practice:
+            lessons=[]
+            practice_info={'id':practice.pk,'title':practice.title,'end':practice.end_date.isoformat(),
+                           'start':practice.start_date.isoformat(),'organization':practice.organization,
+                           'label':f'{practice.title} до {practice.end_date:%d.%m.%Y}'}
+            coverage.update(has_data=True,empty_reason='',next_date=None)
         days.append({'date':day.isoformat(),'lessons':lessons,'free_intervals':gaps if coverage['has_data'] else [],
-                     'week':week_info(day),**coverage})
+                     'windows':svc.lesson_windows([x for x in lessons if x['status']!='reassigned'],day),
+                     'practice':practice_info,'shortened_day':short_day_info(day),'week':week_info(day),**coverage})
     return JsonResponse({'id':pk,'name':obj.number if kind=='rooms' else obj.name,'kind':kind,'days':days,
                          'week':week_info(date_)},json_dumps_params={'ensure_ascii':False})
 

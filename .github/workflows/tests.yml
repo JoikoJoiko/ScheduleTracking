@@ -20,3 +20,7 @@ jobs:
       - run: python manage.py test
       - run: node --check static/app.js
       - run: node --check static/admin-dashboard.js
+      - run: node --check static/admin-image-review.js
+      - run: node --check static/admin-operations.js
+      - run: node --check static/admin-selects.js
+      - run: node --test tools/test_frontend.cjs

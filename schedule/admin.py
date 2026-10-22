@@ -280,6 +280,19 @@ class WeekdayBellsAdmin(SafeAdmin):
         return request.user.is_superuser
 
 
+@admin.register(ShortenedDay)
+class ShortenedDayAdmin(SafeAdmin):
+    list_display=['date','lesson_minutes','start_time','is_active']
+    list_filter=['is_active']
+
+
+@admin.register(PracticePeriod)
+class PracticeAdmin(SafeAdmin):
+    list_display=['group','start_date','end_date','title','organization','is_active']
+    list_filter=['is_active','group']
+    search_fields=['group__name','title','organization']
+
+
 @admin.register(Room)
 class RoomsAdmin(SafeAdmin):
     list_display=['number','is_active']
@@ -366,14 +379,21 @@ class ImageAdmin(SafeAdmin):
     def review(self,request,pk):
         from django.shortcuts import get_object_or_404
         from django.forms import formset_factory
-        from .image_import import publish_review,resolve_candidates
+        from .image_import import publish_review,infer_row
         batch=get_object_or_404(self.get_queryset(request),pk=pk)
-        initial=[]
+        initial=[];dictionaries={};previews_rows=[];base=services.base_schedule(batch.target_date)
         for row in batch.payload:
-            suggestions=resolve_candidates(row.get('group_id'),batch.target_date,row.get('subject_text',''),row.get('teacher_text',''))
+            group_id=row.get('group_id')
+            if group_id not in dictionaries:
+                from .curriculum import curriculum_for
+                group=StudentGroup.objects.filter(pk=group_id).first()
+                dictionaries[group_id]=curriculum_for(group,batch.target_date) if group else None
+            suggestions=infer_row(group_id,batch.target_date,row,dictionaries[group_id],base)
+            # Older pending uploads also show when newly completed fields are inferred.
+            previews_rows.append(row if 'inferred' in row else {**row,**{key:suggestions[key] for key in ['inferred','confidence','inferences']}})
             initial.append({'group':row.get('group_id'),'subgroup':row.get('subgroup_id'),'slot':row.get('slot'),
-                'kind':row.get('kind','replace'),'subject':suggestions['subject_id'],
-                'teacher':suggestions['teacher_id'],'room':row.get('room_id')})
+                'kind':row.get('kind','replace'),'subject':row.get('subject_id') or suggestions['subject_id'],
+                'teacher':row.get('teacher_id') or suggestions['teacher_id'],'room':row.get('room_id') or suggestions['room_id']})
         FormSet=formset_factory(ImageRowForm,extra=3,max_num=250,validate_max=True)
         formset=FormSet(request.POST or None,initial=initial,form_kwargs={'target_date':batch.target_date})
         if request.method=='POST' and batch.status=='review':
@@ -396,5 +416,5 @@ class ImageAdmin(SafeAdmin):
                 except (ValidationError,PermissionDenied) as exc:
                     self.message_user(request,str(exc),messages.ERROR)
         previews=[r.get('group_text','')+' · '+r.get('raw','') for r in batch.payload]
-        items=[(form,previews[i] if i<len(previews) else '',batch.payload[i] if i<len(batch.payload) else {}) for i,form in enumerate(formset)]
+        items=[(form,previews[i] if i<len(previews) else '',previews_rows[i] if i<len(previews_rows) else {}) for i,form in enumerate(formset)]
         return render(request,'admin/image_review.html',dict(self.admin_site.each_context(request),title='Проверка замен',batch=batch,formset=formset,items=items))
