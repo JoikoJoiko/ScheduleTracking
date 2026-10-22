@@ -107,3 +107,58 @@ test('public short-day caption uses the complete schedule label',()=>{
     const html=vm.runInContext("dayPanel({date:'2026-10-19',has_data:true,lessons:[],shortened_day:{label:'Сокращённый день · 4 пары по 40 мин'}})",p.context);
     assert.match(html,/4 пары по 40 мин/);
 });
+
+function reviewPage(values) {
+    const control=(value='')=>({value,checked:false,disabled:false,textContent:'',events:{},
+        addEventListener(name,handler){this.events[name]=handler;}});
+    const selectAll=control(),removeEmpty=control(),status=control(),events={};
+    const controls={'[data-review-select-all]':selectAll,'[data-review-remove-empty]':removeEmpty,'[data-review-status]':status};
+    const form={querySelector:selector=>controls[selector]};
+    const rows=values.map((values,index)=>{
+        const fields=Object.fromEntries(['use','DELETE','group','subgroup','slot','kind','subject','teacher','room']
+            .map(name=>[name,control(values[name] ?? (name==='kind'?'replace':''))]));
+        fields.use.checked=!!values.checked;
+        fields.group.name=`form-${index}-group`;
+        return {fields,dataset:{hasSource:values.source?'1':''},hidden:false,
+            querySelector(selector){return selector==='.candidate-status'?control():fields[selector.match(/-([A-Za-z]+)"/)[1]];}};
+    });
+    const table={tBodies:[{rows}],closest:()=>form,addEventListener:(name,handler)=>{events[name]=handler;}};
+    const document={querySelectorAll:selector=>selector==='.review-table'?[table]:rows};
+    vm.runInNewContext(fs.readFileSync('static/admin-image-review.js','utf8'),{document});
+    return {rows,selectAll,removeEmpty,status,events};
+}
+
+test('select all toggles populated and unresolved source rows without selecting blank extras',()=>{
+    const p=reviewPage([{group:'1',slot:'1'},{},{source:true},{subject:'2'}]);
+    p.selectAll.events.click();
+    assert.deepEqual(p.rows.map(row=>row.fields.use.checked),[true,false,true,true]);
+    assert.equal(p.selectAll.textContent,'Снять выделение');
+    assert.match(p.status.textContent,/3 из 3/);
+    p.selectAll.events.click();
+    assert.ok(p.rows.every(row=>!row.fields.use.checked));
+    assert.equal(p.selectAll.textContent,'Выбрать все');
+});
+
+test('removing empty rows preserves form indices, partial edits and unreadable image evidence',()=>{
+    const p=reviewPage([{group:'1'}, {}, {source:true}, {slot:'2'}, {kind:'cancel'}, {DELETE:'on'}]);
+    const names=p.rows.map(row=>row.fields.group.name);
+    p.removeEmpty.events.click();
+    assert.deepEqual(p.rows.map(row=>row.hidden),[false,true,false,false,false,true]);
+    assert.equal(p.rows[1].fields.DELETE.value,'on');
+    assert.deepEqual(p.rows.map(row=>row.fields.group.name),names);
+    assert.equal(p.removeEmpty.disabled,true);
+    p.selectAll.events.click();
+    assert.deepEqual(p.rows.map(row=>row.fields.use.checked),[true,false,true,true,true,false]);
+});
+
+test('bulk controls react to manual selection and become disabled when no active rows remain',()=>{
+    const p=reviewPage([{group:'1',DELETE:'False'}]);
+    assert.equal(p.rows[0].hidden,false);
+    p.rows[0].fields.use.checked=true;p.events.change();
+    assert.equal(p.selectAll.textContent,'Снять выделение');
+    p.rows[0].fields.group.value='';p.events.input();
+    assert.equal(p.selectAll.disabled,true);assert.equal(p.removeEmpty.disabled,false);
+    p.removeEmpty.events.click();
+    assert.equal(p.rows[0].fields.use.checked,false);assert.equal(p.removeEmpty.disabled,true);
+    assert.match(p.status.textContent,/0 из 0/);
+});

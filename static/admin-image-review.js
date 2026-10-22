@@ -1,4 +1,48 @@
 'use strict';
+const reviewField = (row, name) => row.querySelector(`[name$="-${name}"]`);
+const reviewRowDeleted = row => ['on','true','1'].includes(String(reviewField(row,'DELETE')?.value).toLowerCase());
+function reviewRowEmpty(row) {
+    // Unreadable OCR rows still contain source evidence and need human review.
+    return row.dataset.hasSource!=='1' &&
+        ['group','subgroup','slot','subject','teacher','room'].every(name => !String(reviewField(row,name)?.value || '').trim()) &&
+        reviewField(row,'kind')?.value!=='cancel';
+}
+
+document.querySelectorAll('.review-table').forEach(table => {
+    const form=table.closest('form'), selectAll=form.querySelector('[data-review-select-all]');
+    const removeEmpty=form.querySelector('[data-review-remove-empty]'), status=form.querySelector('[data-review-status]');
+    if (!selectAll || !removeEmpty) return;
+    const rows=() => [...table.tBodies[0].rows].filter(row => !reviewRowDeleted(row));
+    const refresh=(message='') => {
+        const active=rows(), filled=active.filter(row => !reviewRowEmpty(row));
+        const selected=filled.filter(row => reviewField(row,'use').checked).length;
+        selectAll.textContent=filled.length && selected===filled.length?'Снять выделение':'Выбрать все';
+        selectAll.disabled=!filled.length;
+        removeEmpty.disabled=!active.some(reviewRowEmpty);
+        status.textContent=`${message}Выбрано: ${selected} из ${filled.length}`;
+    };
+    selectAll.addEventListener('click',() => {
+        const filled=rows().filter(row => !reviewRowEmpty(row));
+        const select=!filled.every(row => reviewField(row,'use').checked);
+        filled.forEach(row => {reviewField(row,'use').checked=select;});
+        refresh();
+    });
+    removeEmpty.addEventListener('click',() => {
+        const empty=rows().filter(reviewRowEmpty);
+        empty.forEach(row => {
+            // Preserve form indices so Django and source-fragment links keep matching.
+            reviewField(row,'DELETE').value='on';
+            reviewField(row,'use').checked=false;
+            row.hidden=true;
+        });
+        refresh(`Удалено: ${empty.length}. `);
+    });
+    [...table.tBodies[0].rows].forEach(row => {row.hidden=reviewRowDeleted(row);});
+    table.addEventListener('change',() => refresh());
+    table.addEventListener('input',() => refresh());
+    refresh();
+});
+
 document.querySelectorAll('.review-table tbody tr').forEach(row => {
     const field = name => row.querySelector(`select[name$="-${name}"]`);
     const status = row.querySelector('.candidate-status');

@@ -425,7 +425,7 @@ class ImageAdmin(SafeAdmin):
             initial.append({'group':row.get('group_id'),'subgroup':row.get('subgroup_id'),'slot':row.get('slot'),
                 'kind':row.get('kind','replace'),'subject':row.get('subject_id') or suggestions['subject_id'],
                 'teacher':row.get('teacher_id') or suggestions['teacher_id'],'room':row.get('room_id') or suggestions['room_id']})
-        FormSet=formset_factory(ImageRowForm,extra=3,max_num=250,validate_max=True)
+        FormSet=formset_factory(ImageRowForm,extra=3,max_num=250,validate_max=True,can_delete=True)
         formset=FormSet(request.POST or None,initial=initial,form_kwargs={'target_date':batch.target_date})
         if request.method=='POST' and batch.status=='review':
             if request.POST.get('cancel'):
@@ -435,7 +435,7 @@ class ImageAdmin(SafeAdmin):
                 rows=[]
                 for form in formset:
                     d=form.cleaned_data
-                    if not d or not d.get('use'):
+                    if not d or d.get('DELETE') or not d.get('use'):
                         continue
                     rows.append({'group_id':d['group'].pk,'slot':d['slot'],'kind':d['kind'],
                         'subgroup_id':d['subgroup'].pk if d.get('subgroup') else None,
