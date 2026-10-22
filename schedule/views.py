@@ -15,6 +15,7 @@ from django.utils import timezone
 from .models import *
 from . import services as svc
 from .importing import preview_import, confirm_import, import_report
+from .previewing import ImportPreviewUnavailable
 from .timing import week_info, bells_for, slot_times, short_day_info, curator_bells_for
 from .curriculum import curriculum_for, schedule_coverage
 
@@ -44,6 +45,8 @@ def api(fn):
             return error('forbidden',str(exc) or 'Недостаточно прав',403)
         except Http404:
             return error('not_found','Запись не найдена',404)
+        except ImportPreviewUnavailable as exc:
+            return error('preview_unavailable',str(exc),503)
         except (ValidationError,ValueError,TypeError,KeyError, json.JSONDecodeError) as exc:
             message='; '.join(exc.messages) if isinstance(exc,ValidationError) else str(exc)
             return error('validation',message,400)

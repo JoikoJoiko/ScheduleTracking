@@ -205,7 +205,15 @@ def populate_version(version,payload,reuse_existing=False):
 
 
 def import_report(batch):
-    """Use a rollback-only transaction so previews share real publication rules."""
+    from django.db import connection
+    if connection.vendor=='sqlite' and batch.status=='preview' and not batch.errors:
+        from .previewing import sqlite_import_report
+        return sqlite_import_report(batch)
+    return _calculate_import_report(batch)
+
+
+def _calculate_import_report(batch):
+    """Simulate publication in a rollback-only transaction (isolated copy on SQLite)."""
     if batch.metadata.get('college'):
         report={'rows':batch.payload,'conflicts':[],'new_count':len(batch.payload),
             'previous_count':Lesson.objects.filter(version__status='published',participants__group__name__in=[x['name'] for x in batch.metadata['groups']]).distinct().count(),

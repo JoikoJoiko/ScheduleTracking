@@ -31,7 +31,9 @@ TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIR
               'APP_DIRS': True, 'OPTIONS': {'context_processors': ['django.template.context_processors.request',
               'django.contrib.auth.context_processors.auth', 'django.contrib.messages.context_processors.messages', 'college.context.release']}}]
 WSGI_APPLICATION = 'college.wsgi.application'
-DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'db.sqlite3', 'OPTIONS': {'timeout': 20}}}
+# WAL keeps readers independent of writers; IMMEDIATE avoids read-to-write lock upgrades.
+DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'db.sqlite3',
+    'OPTIONS': {'timeout': 20,'transaction_mode':'IMMEDIATE','init_command':'PRAGMA journal_mode=WAL;'}}}
 if os.getenv('DATABASE_URL'):
     db = urlparse(os.environ['DATABASE_URL'])
     DATABASES['default'] = {'ENGINE': 'django.db.backends.postgresql', 'NAME': db.path.lstrip('/'),

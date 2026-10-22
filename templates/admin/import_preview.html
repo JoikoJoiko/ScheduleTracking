@@ -2,8 +2,9 @@
 {% block content %}<p><strong>{{ batch.filename }}</strong> · {{ batch.payload|length }} строк · {{ group_count }} групп · статус: {{ batch.status }}</p>
 <p>{{ batch.effective_from }} — {{ batch.effective_to }}{% if batch.metadata.college %} · Только группы из файла{% endif %}</p>
 {% for error in batch.errors %}<p class="errornote">{{ error }}</p>{% endfor %}
+{% if preview_error %}<p class="errornote" role="alert">{{ preview_error }}</p><p><a href="{{ request.path }}" class="button">Повторить проверку</a></p>{% else %}
 <p>Было: {{ report.previous_count }} · Загружено: {{ report.new_count }} · Групп: {{ group_count }}</p>
 {% for conflict in report.conflicts %}<p class="errornote">{{ conflict.date }} · {{ conflict.type }} · {{ conflict.lesson.subject }} · {{ conflict.lesson.room }}</p>{% endfor %}
 <table><thead><tr><th>День (0–6)</th><th>Группа</th><th>Подгруппа</th><th>Дисциплина</th><th>Преподаватель</th><th>Аудитория</th><th>Неделя</th></tr></thead><tbody>{% for row in report.rows %}<tr><td>{{ row.day_of_week }}</td><td>{{ row.group }}</td><td>{{ row.subgroup }}</td><td>{{ row.subject }}</td><td>{{ row.teacher }}</td><td>{{ row.room }}</td><td>{{ row.week_type }}</td></tr>{% endfor %}</tbody></table>
-<form method="post">{% csrf_token %}{% if not batch.errors and not report.conflicts and batch.status == 'preview' %}<input type="submit" value="Подтвердить и опубликовать">{% endif %}
+{% endif %}<form method="post">{% csrf_token %}{% if not preview_error and not batch.errors and not report.conflicts and batch.status == 'preview' %}<input type="submit" value="Подтвердить и опубликовать">{% endif %}
 {% if batch.status == 'preview' %}<button name="cancel" value="1">Отменить импорт</button>{% endif %}</form>{% endblock %}

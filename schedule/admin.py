@@ -10,6 +10,7 @@ from django import forms
 from .models import *
 from . import services
 from .importing import preview_import, confirm_import, import_report
+from .previewing import ImportPreviewUnavailable
 
 admin.site.site_header = 'Расписание · управление'
 admin.site.site_title = 'Расписание колледжа'
@@ -213,9 +214,14 @@ class ImportAdmin(SafeAdmin):
             except (ValidationError,PermissionDenied) as exc:
                 self.message_user(request,str(exc),messages.ERROR)
         current=services.version_on(batch.effective_from)
-        report=import_report(batch)
+        preview_error=''
+        try:
+            report=import_report(batch)
+        except ImportPreviewUnavailable as exc:
+            report=None;preview_error=str(exc)
         return render(request,'admin/import_preview.html',dict(self.admin_site.each_context(request),batch=batch,
-            report=report,group_count=len({r.get('group_id',r.get('group')) for r in batch.payload}),current=current,title='Предварительный просмотр импорта'))
+            report=report,preview_error=preview_error,group_count=len({r.get('group_id',r.get('group')) for r in batch.payload}),
+            current=current,title='Предварительный просмотр импорта'),status=503 if preview_error else 200)
 
 
 @admin.register(AcademicYear)
