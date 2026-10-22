@@ -200,7 +200,7 @@ def schedule(request,kind,pk):
         dates=[monday+timedelta(days=i) for i in range(6)]
     days=[]
     for day in dates:
-        lessons=svc.schedule_on(day)
+        lessons=svc.annotate_joint_groups(svc.schedule_on(day))
         if kind=='groups':
             lessons=[x for x in lessons if any(g['id']==pk for g in x['groups']) or any(g['id']==pk for g in (x.get('original') or {}).get('groups',[]))]
         elif kind=='teachers':
@@ -276,9 +276,15 @@ def room_availability(request):
 def changes(request):
     day=selected_date(request)
     rows=[]
+    current={l['change_id']:l for l in svc.annotate_joint_groups(svc.schedule_on(day)) if l.get('change_id')}
     for change in Change.objects.filter(status='published',target_date=day).select_related('original','room','teacher','subject'):
         base=svc.lesson_dict(change.original,change.target_date) if change.original else None
+        if base and change.target_group_id:
+            base,_=svc.split_change_target(base,change)
         item=svc.apply_change(change,base)
+        # History keeps its own source lesson; only the current revision inherits today's joint attendance.
+        live_item=current.get(change.pk)
+        item['joint_groups']=live_item['joint_groups'] if live_item and live_item['date']==item['date'] else []
         if request.GET.get('group') and not any(g['id']==int(request.GET['group']) for g in item['groups']):
             continue
         if request.GET.get('building') and item['building_id']!=int(request.GET['building']):

@@ -222,6 +222,46 @@ def room_overlap_key(lesson):
     return hashlib.sha256(json.dumps(snapshot,sort_keys=True).encode()).hexdigest()
 
 
+def overlap_approval_check(lessons):
+    approvals={c['pk']:c for c in Change.objects.filter(pk__in={x['change_id'] for x in lessons if x.get('change_id')})
+        .values('pk','room_overlap_approvals','teacher_overlap_approvals')}
+    keys={id(x):room_overlap_key(x) for x in lessons}
+    def approved(a,b,field):
+        # Each resource needs its own decision for these exact two lessons.
+        return any(p.get('lesson')==keys[id(own)] and p.get('other')==keys[id(other)]
+            for own,other in [(a,b),(b,a)] for p in approvals.get(own.get('change_id'),{}).get(field,[]))
+    return approved
+
+
+def joint_class_hour(a,b):
+    return (a['slot']==b['slot']==0 and a.get('curator_shift') and a.get('event_kind')==b.get('event_kind')=='class_hour'
+        and all(a.get(key)==b.get(key) for key in ['slot','start','end','curator_shift','subject_id','teacher_id','room_id']))
+
+
+def annotate_joint_groups(lessons):
+    """Describe shared attendance without changing participants or occupancy checks."""
+    active=[x for x in lessons if live(x)]
+    approved=overlap_approval_check(active)
+    participants={id(x):{(g['id'],g.get('subgroup_id')):g for g in x['groups']} for x in active}
+    pools={}
+    for lesson in active:
+        # Subjects may have different curriculum names for the two groups.
+        key=tuple(lesson.get(k) for k in ['date','slot','start','end','teacher_id','room_id','event_kind','curator_shift'])
+        pools.setdefault(key,[]).append(lesson)
+    for pool in pools.values():
+        for i,a in enumerate(pool):
+            for b in pool[i+1:]:
+                if not a['start'] or not a['end']:
+                    continue
+                if joint_class_hour(a,b) or (approved(a,b,'room_overlap_approvals') and approved(a,b,'teacher_overlap_approvals')):
+                    for own,other in [(a,b),(b,a)]:
+                        participants[id(own)].update({(g['id'],g.get('subgroup_id')):g for g in other['groups']})
+    for lesson in lessons:
+        groups=list(participants.get(id(lesson),{}).values())
+        lesson['joint_groups']=deepcopy(groups) if len({g['id'] for g in groups})>1 else []
+    return lessons
+
+
 def describe_lesson(lesson):
     if not lesson:
         return ''
@@ -240,13 +280,7 @@ def conflicts_for(date, lessons,include_allowed=False):
     conflicts = []
     def add(kind, a, b=None,allowed=False):
         conflicts.append({'type': kind, 'date': date.isoformat(), 'lesson': a, 'other': b,'allowed':allowed})
-    approvals={c['pk']:c for c in Change.objects.filter(pk__in={x['change_id'] for x in active if x.get('change_id')})
-        .values('pk','room_overlap_approvals','teacher_overlap_approvals')}
-    keys={id(x):room_overlap_key(x) for x in active}
-    def approved(a,b,field):
-        # Each resource needs its own decision for these exact two lessons.
-        return any(p.get('lesson')==keys[id(own)] and p.get('other')==keys[id(other)]
-            for own,other in [(a,b),(b,a)] for p in approvals.get(own.get('change_id'),{}).get(field,[]))
+    approved=overlap_approval_check(active)
     rooms = {x.pk: x for x in Room.objects.select_related('building')}
     day_start = timezone.make_aware(datetime.combine(date, time.min))
     blocks = list(RoomBlock.objects.filter(start_at__lt=day_start+timedelta(days=1), end_at__gt=day_start))
@@ -262,8 +296,7 @@ def conflicts_for(date, lessons,include_allowed=False):
             if not overlaps(a['start'], a['end'], b['start'], b['end']):
                 continue
             # A curator can lead several groups, recorded in separate course files.
-            joint_hour=(a['slot']==b['slot']==0 and a.get('curator_shift') and a.get('event_kind')==b.get('event_kind')=='class_hour'
-                and all(a.get(key)==b.get(key) for key in ['slot','start','end','curator_shift','subject_id','teacher_id','room_id']))
+            joint_hour=joint_class_hour(a,b)
             if a['room_id'] == b['room_id'] and not joint_hour:
                 allowed=approved(a,b,'room_overlap_approvals')
                 if include_allowed or not allowed:

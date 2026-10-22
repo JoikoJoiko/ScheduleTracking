@@ -41,15 +41,41 @@ function toolbar(title = 'Расписание', withWeek = true) {
     const day = selectedDate(), week = params().get('view') === 'week';
     return `<div class="toolbar"><div class="toolbar-left"><h2>${esc(title)}</h2><span class="count">${week&&withWeek?`${formatDate(meta.week.start,{day:'numeric',month:'short'})} – ${formatDate(shiftDate(meta.week.start,5),{day:'numeric',month:'short'})}`:formatDate(day,{day:'numeric',month:'long'})}</span><span class="week-badge">${esc(meta.week.label)}</span></div><div class="toolbar-right"><div class="segmented"><button data-date="${meta.today}" class="${day===teachingDate(meta.today)&&!week?'active':''}">${teachingDate(meta.today)===meta.today?'Сегодня':'Ближайший день'}</button><button data-date="${shiftDate(meta.today,1)}" class="${day===teachingDate(shiftDate(meta.today,1))&&!week?'active':''}">${teachingDate(shiftDate(meta.today,1))===shiftDate(meta.today,1)?'Завтра':'Понедельник'}</button>${withWeek?`<button data-view="${week?'day':'week'}" class="${week?'active':''}">Неделя</button>`:''}</div><button class="btn small" data-shift="-1" aria-label="Назад">‹</button><input type="date" name="date" data-filter aria-label="Дата" value="${day}"><button class="btn small" data-shift="1" aria-label="Вперёд">›</button></div></div>`;
 }
-function lessonCard(l) {
-    const label = l.current ? 'Сейчас' : l.next ? 'Далее' : statuses[l.status];
+function groupLinks(groups, date) {
+    return groups.map(g=>`<a data-nav href="/groups/${g.id}?date=${esc(date)}">${esc(g.name)}${g.subgroup?' · подгр. '+esc(g.subgroup):''}</a>`).join('');
+}
+function lessonCard(l, groupId = null) {
+    const state = l.current ? 'Сейчас' : l.next ? 'Далее' : '';
+    const label = statuses[l.status];
     const original = l.original;
     const subgroups=l.groups.filter(g=>g.subgroup);
-    return `<article class="lesson ${esc(l.status)} ${l.current?'current':''} ${subgroups.length?'subgroup-lesson':''}"><div class="lesson-time">${l.start?`${esc(l.start)}<br><span style="color:var(--muted)">${esc(l.end)}</span>`:'—'}<small>${l.slot?l.slot+' пара':'Кураторский час'}</small></div><div class="lesson-info">${subgroups.length?`<div class="subgroup-badges">${subgroups.map(g=>`<span>${l.groups.length>1?esc(g.name)+' · ':''}Подгруппа ${esc(g.subgroup)}</span>`).join('')}</div>`:''}<h3>${esc(l.subject)}</h3>${l.event_kind==='class_hour'?'<span class="badge">Кураторский час</span>':''}${label?`<span class="badge ${l.current?'current':esc(l.status)}">${esc(label)}</span>`:''}<div class="meta"><a data-nav href="/teachers/${l.teacher_id}?date=${l.date}">${esc(l.teacher)}</a>${l.groups.map(g=>`<a data-nav href="/groups/${g.id}?date=${l.date}">${esc(g.name)}</a>`).join('')}</div>${l.change_id?`<details><summary>Изменения</summary>${original?`<p>Было: ${esc(original.subject)} · ${esc(original.teacher)} · ${esc(original.room)}${original.start?' · '+esc(original.start):''}</p>`:''}${l.new_date?`<p>Перенос на ${formatDate(l.new_date)}</p>`:''}${l.reason?`<p>${esc(l.reason)}</p>`:''}</details>`:''}</div><div class="lesson-room"><a data-nav href="/rooms/${l.room_id}?date=${l.date}">${esc(l.room)}</a></div></article>`;
+    const joint=l.joint_groups ?? l.groups;
+    const shared=!['cancelled','moved_out','reassigned'].includes(l.status) && new Set(joint.map(g=>g.id)).size>1;
+    const ownGroup=groupId!==null && joint.some(g=>g.id===groupId);
+    const companions=ownGroup?joint.filter(g=>g.id!==groupId):joint;
+    const instead=original && ['changed','moved','reassigned'].includes(l.status);
+    const originalMeta=original?[original.teacher,original.room?'каб. '+original.room:'',
+        original.start?original.start+(original.end?'–'+original.end:''):'',
+        original.date&&original.date!==l.date?formatDate(original.date,{day:'numeric',month:'short'}):''].filter(Boolean):[];
+    return `<article class="lesson ${esc(l.status)} ${l.current?'current':''} ${subgroups.length?'subgroup-lesson':''}">
+        <div class="lesson-time">${l.start?`${esc(l.start)}<br><span style="color:var(--muted)">${esc(l.end)}</span>`:'—'}<small>${l.slot?l.slot+' пара':'Кураторский час'}</small></div>
+        <div class="lesson-info">
+            ${subgroups.length?`<div class="subgroup-badges">${subgroups.map(g=>`<span>${l.groups.length>1?esc(g.name)+' · ':''}Подгруппа ${esc(g.subgroup)}</span>`).join('')}</div>`:''}
+            <h3>${esc(l.subject)}</h3>
+            ${l.event_kind==='class_hour'?'<span class="badge">Кураторский час</span>':''}
+            ${state?`<span class="badge ${l.current?'current':''}">${esc(state)}</span>`:''}
+            ${label?`<span class="badge ${esc(l.status)}">${esc(label)}</span>`:''}
+            <div class="meta"><a data-nav href="/teachers/${l.teacher_id}?date=${esc(l.date)}">${esc(l.teacher)}</a>${groupLinks(l.groups,l.date)}</div>
+            ${shared?`<div class="lesson-joint"><span>${ownGroup?'Объединено с':'Объединённая пара'}</span><div>${groupLinks(companions,l.date)}</div></div>`:''}
+            ${instead?`<div class="lesson-original"><span>Вместо</span><strong>${esc(original.subject)}</strong>${originalMeta.length?`<small>${originalMeta.map(esc).join(' · ')}</small>`:''}</div>`:''}
+            ${l.change_id&&(l.new_date||l.reason)?`<details><summary>Изменения</summary>${l.new_date?`<p>Перенос на ${formatDate(l.new_date)}</p>`:''}${l.reason?`<p>${esc(l.reason)}</p>`:''}</details>`:''}
+        </div>
+        <div class="lesson-room"><a data-nav href="/rooms/${l.room_id}?date=${esc(l.date)}">${esc(l.room)}</a></div>
+    </article>`;
 }
-function dayPanel(day, gaps = true, room = false) {
+function dayPanel(day, gaps = true, room = false, groupId = null) {
     const intervals=room?day.free_intervals:day.windows;
-    return `<section class="panel"><div class="panel-head"><h2>${formatDate(day.date,{weekday:'long',day:'numeric',month:'short'})}</h2><span class="count">${day.lessons.filter(x=>!['cancelled','moved_out','reassigned'].includes(x.status)).length} занятий</span></div>${day.shortened_day?`<div class="day-notice">${esc(day.shortened_day.label)}</div>`:''}${day.practice?`<div class="practice-notice"><span>↗</span><div><strong>${esc(day.practice.label)}</strong>${day.practice.organization?`<p>${esc(day.practice.organization)}</p>`:''}</div></div>`:day.lessons.map(lessonCard).join('')||`<div class="empty"><strong>${day.has_data?'Занятий нет':'Нет расписания'}</strong>${day.empty_reason?`<p>${esc(day.empty_reason)}</p>`:''}${day.next_date?`<button class="btn small" data-date="${day.next_date}">Открыть ${formatDate(day.next_date,{weekday:'short',day:'numeric',month:'long'})} →</button>`:''}</div>`}${gaps&&intervals?.length?`<div class="panel-body count">${room?'Свободно':'Окна'}: ${intervals.map(x=>`${x.start}–${x.end}`).join(' · ')}</div>`:''}</section>`;
+    return `<section class="panel"><div class="panel-head"><h2>${formatDate(day.date,{weekday:'long',day:'numeric',month:'short'})}</h2><span class="count">${day.lessons.filter(x=>!['cancelled','moved_out','reassigned'].includes(x.status)).length} занятий</span></div>${day.shortened_day?`<div class="day-notice">${esc(day.shortened_day.label)}</div>`:''}${day.practice?`<div class="practice-notice"><span>↗</span><div><strong>${esc(day.practice.label)}</strong>${day.practice.organization?`<p>${esc(day.practice.organization)}</p>`:''}</div></div>`:day.lessons.map(l=>lessonCard(l,groupId)).join('')||`<div class="empty"><strong>${day.has_data?'Занятий нет':'Нет расписания'}</strong>${day.empty_reason?`<p>${esc(day.empty_reason)}</p>`:''}${day.next_date?`<button class="btn small" data-date="${day.next_date}">Открыть ${formatDate(day.next_date,{weekday:'short',day:'numeric',month:'long'})} →</button>`:''}</div>`}${gaps&&intervals?.length?`<div class="panel-body count">${room?'Свободно':'Окна'}: ${intervals.map(x=>`${x.start}–${x.end}`).join(' · ')}</div>`:''}</section>`;
 }
 function sidebar() {
     const f = favorite();
@@ -82,7 +108,7 @@ async function home(current) {
     let schedule;
     if (selected) schedule = await get(`/api/groups/${Number(selected)}/schedule?date=${selectedDate()}&view=${params().get('view')||'day'}`);
     const changes = await get(`/api/changes?date=${selectedDate()}&page_size=3`); if (current!==token) return;
-    document.querySelector('#home-content').innerHTML = `<div class="split"><div>${toolbar('Расписание')}<div class="filters" style="margin:0 0 16px"><label class="sr-only" for="home-group">Группа</label><select id="home-group" name="group" data-filter>${options(groups.results,selected,'Выберите группу')}</select></div>${schedule?(params().get('view')==='week'?`<div class="week-grid">${schedule.days.map(d=>dayPanel(d,false)).join('')}</div>`:dayPanel(schedule.days[0],false)):'<div class="panel empty">Расписание ещё не загружено</div>'}<div class="toolbar"><h2>Замены <span class="count">${changes.count}</span></h2><a class="count" data-nav href="/changes?date=${selectedDate()}">Все →</a></div><section class="panel">${changes.results.map(lessonCard).join('')||'<div class="panel-body count">На эту дату замен нет</div>'}</section></div>${sidebar()}</div>`;
+    document.querySelector('#home-content').innerHTML = `<div class="split"><div>${toolbar('Расписание')}<div class="filters" style="margin:0 0 16px"><label class="sr-only" for="home-group">Группа</label><select id="home-group" name="group" data-filter>${options(groups.results,selected,'Выберите группу')}</select></div>${schedule?(params().get('view')==='week'?`<div class="week-grid">${schedule.days.map(d=>dayPanel(d,false,false,selected)).join('')}</div>`:dayPanel(schedule.days[0],false,false,selected)):'<div class="panel empty">Расписание ещё не загружено</div>'}<div class="toolbar"><h2>Замены <span class="count">${changes.count}</span></h2><a class="count" data-nav href="/changes?date=${selectedDate()}">Все →</a></div><section class="panel">${changes.results.map(l=>lessonCard(l)).join('')||'<div class="panel-body count">На эту дату замен нет</div>'}</section></div>${sidebar()}</div>`;
 }
 async function catalog(kind,current) {
     app.innerHTML = heading(kind==='groups'?'Группы':'Преподаватели')+searchPanel(kind)+'<div id="results" class="empty">Загрузка…</div>';
@@ -97,7 +123,7 @@ async function detail(kind,id,current) {
         const lessons=result.days.flatMap(x=>x.lessons), live=lessons.find(x=>x.current), next=lessons.find(x=>x.next);
         location=`<div class="location"><strong>${live?`Сейчас: ${esc(live.room)} · до ${live.end}`:'Сейчас занятий нет'}</strong>${!live&&next?`<p>Далее в ${next.start} · ${esc(next.room)}</p>`:''}</div>`;
     }
-    app.innerHTML=`<a class="back" data-nav href="/${kind}">← ${kind==='groups'?'Группы':kind==='teachers'?'Преподаватели':'Кабинеты'}</a>`+heading(kind==='rooms'?'Кабинет '+result.name:result.name,'',`${kind==='groups'?`<a class="btn" data-nav href="/subjects?group=${id}&date=${selectedDate()}">Дисциплины ↗</a>`:''}<button class="btn" data-favorite="${kind}:${id}" data-name="${esc(result.name)}">☆</button><button class="btn" data-copy>Поделиться ↗</button>`)+toolbar()+location+(params().get('view')==='week'?`<div class="week-grid">${result.days.map(d=>dayPanel(d,false)).join('')}</div>`:`<div class="split"><div>${dayPanel(result.days[0],kind!=='groups',kind==='rooms')}</div>${sidebar()}</div>`);
+    app.innerHTML=`<a class="back" data-nav href="/${kind}">← ${kind==='groups'?'Группы':kind==='teachers'?'Преподаватели':'Кабинеты'}</a>`+heading(kind==='rooms'?'Кабинет '+result.name:result.name,'',`${kind==='groups'?`<a class="btn" data-nav href="/subjects?group=${id}&date=${selectedDate()}">Дисциплины ↗</a>`:''}<button class="btn" data-favorite="${kind}:${id}" data-name="${esc(result.name)}">☆</button><button class="btn" data-copy>Поделиться ↗</button>`)+toolbar()+location+(params().get('view')==='week'?`<div class="week-grid">${result.days.map(d=>dayPanel(d,false,false,kind==='groups'?id:null)).join('')}</div>`:`<div class="split"><div>${dayPanel(result.days[0],kind!=='groups',kind==='rooms',kind==='groups'?id:null)}</div>${sidebar()}</div>`);
 }
 async function rooms(current) {
     const p=params();
@@ -115,7 +141,7 @@ async function rooms(current) {
 async function changes(current) {
     app.innerHTML=heading('Замены','',meta.staff?'<a class="btn primary" href="/admin/schedule/imageimport/upload/">Загрузить изображение ↗</a>':'')+toolbar('Изменения',false)+'<div id="change-results"></div>';
     const result=await get('/api/changes?'+params());if(current!==token)return;
-    document.querySelector('#change-results').innerHTML=`<section class="panel">${result.results.map(lessonCard).join('')||'<div class="empty"><strong>Замен нет</strong></div>'}</section>`+pagination(result);
+    document.querySelector('#change-results').innerHTML=`<section class="panel">${result.results.map(l=>lessonCard(l)).join('')||'<div class="empty"><strong>Замен нет</strong></div>'}</section>`+pagination(result);
 }
 function bells() {
     const now=meta.now.slice(11,16), day=selectedDate(), index=(new Date(day+'T12:00:00').getDay()+6)%7;

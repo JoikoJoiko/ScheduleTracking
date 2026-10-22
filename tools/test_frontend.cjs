@@ -75,6 +75,53 @@ test('curator hours have their alias and shift bells without a numbered pair',()
     assert.match(html,/09:00/);assert.doesNotMatch(html,/0 ПАРА/);
 });
 
+test('replacement card shows its original pair without opening details, including during the current pair',()=>{
+    const p=page();
+    const html=vm.runInContext(`lessonCard({date:'2026-10-22',status:'changed',current:true,change_id:1,
+        subject:'Информатика',teacher:'Петров П.П.',room:'102',groups:[],reason:'Совместное занятие',
+        original:{subject:'Математика',teacher:'Иванов И.И.',room:'101',start:'09:00',end:'10:30'}})`,p.context);
+    assert.match(html,/Замена/);assert.match(html,/Сейчас/);
+    const visible=html.slice(0,html.indexOf('<details>'));
+    for(const text of ['Вместо','Математика','Иванов И.И.','каб. 101','09:00–10:30'])assert.ok(visible.includes(text));
+});
+
+test('extra and cancelled lessons do not pretend to replace a different original pair',()=>{
+    const p=page();
+    for(const status of ['added','cancelled','moved_out']) {
+        const html=vm.runInContext(`lessonCard({date:'2026-10-22',status:'${status}',change_id:1,groups:[],subject:'Математика'})`,p.context);
+        assert.doesNotMatch(html,/Вместо|lesson-original|<details>/);
+    }
+});
+
+test('group schedule names the other combined group and links its subgroup',()=>{
+    const p=page();
+    vm.runInContext(`var jointLesson={date:'2026-10-22',status:'changed',subject:'Физкультура',
+        groups:[{id:1,name:'ИС-1-23'}],joint_groups:[{id:1,name:'ИС-1-23'},{id:2,name:'ГД-1-24',subgroup:'2'}]}`,p.context);
+    const html=vm.runInContext(`dayPanel({date:'2026-10-22',lessons:[jointLesson]},false,false,1)`,p.context);
+    const joint=html.match(/<div class="lesson-joint">[\s\S]*?<\/div><\/div>/)[0];
+    assert.match(joint,/Объединено с/);assert.match(joint,/ГД-1-24 · подгр\. 2/);
+    assert.match(joint,/href="\/groups\/2\?date=2026-10-22"/);assert.doesNotMatch(joint,/ИС-1-23/);
+    assert.match(vm.runInContext('lessonCard(jointLesson)',p.context),/Объединённая пара/);
+});
+
+test('two subgroups of the same group and cancelled joint lessons do not show a combined-group badge',()=>{
+    const p=page();
+    const same=vm.runInContext(`lessonCard({date:'2026-10-22',status:'regular',groups:[
+        {id:1,name:'ИС-1-23',subgroup:'1'},{id:1,name:'ИС-1-23',subgroup:'2'}]},1)`,p.context);
+    assert.doesNotMatch(same,/lesson-joint/);assert.match(same,/Подгруппа 1/);assert.match(same,/Подгруппа 2/);
+    const cancelled=vm.runInContext(`lessonCard({date:'2026-10-22',status:'cancelled',groups:[{id:1},{id:2}]},1)`,p.context);
+    assert.doesNotMatch(cancelled,/lesson-joint/);
+});
+
+test('original lesson and combined-group labels escape imported text',()=>{
+    const p=page();
+    const html=vm.runInContext(`lessonCard({date:'2026-10-22',status:'changed',groups:[{id:1,name:'ИС'}],
+        joint_groups:[{id:1,name:'ИС'},{id:2,name:'<script>alert(1)</script>'}],
+        original:{subject:'<img src=x onerror=alert(1)>',teacher:'A&B',room:'<101>'}},1)`,p.context);
+    assert.doesNotMatch(html,/<script>|<img /);assert.match(html,/&lt;script&gt;/);
+    assert.match(html,/&lt;img src=x onerror=alert\(1\)&gt;/);assert.match(html,/A&amp;B/);
+});
+
 const shortScheme=()=>({lessonCount:3,lessonMinutes:40,start:'08:00',keepBreaks:true,breakMinutes:'',
     regular:[{number:1,start:'08:00',end:'09:30'},{number:2,start:'09:40',end:'11:10'},{number:3,start:'11:40',end:'13:10'}],
     rows:[{number:1,lessonMinutes:'',breakMinutes:5},{number:2,lessonMinutes:'',breakMinutes:25},
