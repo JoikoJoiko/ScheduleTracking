@@ -29,10 +29,11 @@ services:
       DEBUG: "0"
       SECRET_KEY: ${SECRET_KEY:?Run deploy/prepare.py first}
       DATABASE_URL: postgresql://schedule:${POSTGRES_PASSWORD}@db:5432/schedule
-      ALLOWED_HOSTS: ${DOMAIN:?Run deploy/prepare.py first}
+      # Keep the IP/primary host and optional custom hosts alongside the public domain.
+      ALLOWED_HOSTS: ${DOMAIN:?Run deploy/prepare.py first},${ALLOWED_HOSTS:-},nodecor.ru,www.nodecor.ru
       DEPLOY_SCHEME: ${DEPLOY_SCHEME:-https}
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-https://${DOMAIN}}
-      CSRF_TRUSTED_ORIGINS: ${PUBLIC_ORIGIN:-https://${DOMAIN}}
+      CSRF_TRUSTED_ORIGINS: ${PUBLIC_ORIGIN:-https://${DOMAIN}},${CSRF_TRUSTED_ORIGINS:-},${DEPLOY_SCHEME:-https}://nodecor.ru,${DEPLOY_SCHEME:-https}://www.nodecor.ru
       TRUST_PROXY: "1"
       TIME_ZONE: Europe/Moscow
     depends_on:

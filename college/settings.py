@@ -19,7 +19,7 @@ if not SECRET_KEY:
         from django.core.management.utils import get_random_secret_key
         key_file.write_text(get_random_secret_key(), encoding='utf-8')
     SECRET_KEY = key_file.read_text(encoding='utf-8')
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1]').split(',')
+ALLOWED_HOSTS = [x.strip() for x in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1]').split(',') if x.strip()]
 INSTALLED_APPS = ['college.apps.CollegeAdminConfig', 'django.contrib.auth', 'django.contrib.contenttypes',
                   'django.contrib.sessions', 'django.contrib.messages', 'django.contrib.staticfiles', 'schedule']
 MIDDLEWARE = ['django.middleware.security.SecurityMiddleware', 'django.contrib.sessions.middleware.SessionMiddleware',
@@ -73,6 +73,6 @@ if not DEBUG and DEPLOY_SCHEME == 'http':
     SESSION_COOKIE_NAME = 'schedule_sessionid'
     CSRF_COOKIE_NAME = 'schedule_csrftoken'
     SECURE_CROSS_ORIGIN_OPENER_POLICY = None
-CSRF_TRUSTED_ORIGINS = [x for x in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if x]
+CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if x.strip()]
 LOGGING = {'version': 1, 'disable_existing_loggers': False, 'handlers': {'console': {'class': 'logging.StreamHandler'}},
            'root': {'handlers': ['console'], 'level': 'INFO'}}

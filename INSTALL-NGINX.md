@@ -160,6 +160,46 @@ dc=(docker compose --env-file .env.nginx -f compose.nginx.yaml)
 Сценарии генерации конфигурации, резервирования и ошибок проверяются автоматическими тестами. Тесты с `DEBUG=0` проверяют реальный вход в админку, cookies и CSRF для обоих режимов. Workflow `.github/workflows/deployment.yml` на Linux поднимает Docker-стек в матрице HTTPS/HTTP, проверяет Nginx, статику, OCR и резервирование. В HTTP-прогоне дополнительный внешний Nginx слушает 5555 и проверяется вместе с обеими ступенями прокси, портом в Host и CSRF Origin. На локальной машине без Docker сборку контейнеров выполнить нельзя — перед включением сайта запустите `up` и проверьте его на своём сервере.
 
 Использованы стандартные механизмы [готовности Docker Compose](https://docs.docker.com/compose/how-tos/startup-order/), [проксирования Nginx](https://nginx.org/en/docs/http/ngx_http_proxy_module.html) и [доверенных заголовков Waitress](https://docs.pylonsproject.org/projects/waitress/en/stable/reverse-proxy.html).
+## nodecor.ru и www.nodecor.ru по HTTP вместе с IP
+
+В существующей схеме доменный Nginx на 80 направляет запросы на `127.0.0.1:5555`, а сайт на 5555 — на Docker `127.0.0.1:8080`. В `compose.nginx.yaml` оба домена добавляются к `DOMAIN` и необязательному списку `ALLOWED_HOSTS` из окружения. CSRF origins складываются из `PUBLIC_ORIGIN`, существующего `CSRF_TRUSTED_ORIGINS` и origins обоих доменов с текущим `DEPLOY_SCHEME`. При `DEPLOY_SCHEME=http` HTTPS-перенаправления и Secure cookies не включаются. Прежний IP и порт сохраняются.
+
+Для этого обновления **не запускайте prepare.py и не заменяйте .env.nginx**: действующие секреты, порты, схема и имя Compose-проекта остаются прежними. Другие конфигурации Nginx менять не требуется. `.env.example` содержит примеры, а штатный сценарий использует именно `.env.nginx`. В этом изменении нет миграций и изменений бизнес-логики.
+
+После публикации коммита выполните на VPS из существующей папки проекта:
+
+```bash
+cd /путь/к/ScheduleTracking
+git pull --ff-only
+sudo bash deploy/server.sh update
+sudo bash deploy/server.sh status
+```
+
+`update` собирает образ, делает штатную резервную копию и пересоздаёт сервисы с новым окружением, сохраняя томы. Обычный `docker restart` не применяет изменения переменных Compose. Не меняйте имя папки проекта или `SCHEDULE_PROJECT`.
+
+Проверка фактически применённых списков (секреты не выводятся):
+
+```bash
+sudo bash deploy/server.sh manage shell -c "from django.conf import settings; print('ALLOWED_HOSTS:', settings.ALLOWED_HOSTS); print('CSRF_TRUSTED_ORIGINS:', settings.CSRF_TRUSTED_ORIGINS); print('DEBUG:', settings.DEBUG, 'HTTPS redirect:', settings.SECURE_SSL_REDIRECT)"
+```
+
+В списках должны остаться прежние хосты/origins и появиться `nodecor.ru`, `www.nodecor.ru`, `http://nodecor.ru`, `http://www.nodecor.ru`. `DEBUG` и `HTTPS redirect` — `False`. Проверки с VPS:
+
+```bash
+curl --fail --show-error -H 'Host: nodecor.ru' http://127.0.0.1:8080/healthz
+curl --fail --show-error -H 'Host: www.nodecor.ru' http://127.0.0.1:8080/healthz
+curl --fail --show-error http://185.171.83.215:5555/healthz
+curl --fail --show-error http://nodecor.ru/healthz
+curl --fail --show-error http://www.nodecor.ru/healthz
+for base in http://185.171.83.215:5555 http://nodecor.ru http://www.nodecor.ru; do
+    for path in / /admin/login/ /api/meta /static/app.js; do
+        curl --fail --show-error --silent --output /dev/null --write-out '%{http_code} %{url_effective}\n' "$base$path"
+    done
+done
+```
+
+`/healthz` должен вернуть `{"status":"ok"}`, остальные проверки — 200. Также проверьте вход в админку браузером с обоих доменов. Если локальная проверка с `Host` проходит, а внешний домен возвращает 400, проверьте выбранный виртуальный сервер и передачу `Host` в существующей конфигурации **этого** сайта: обе ступени должны сохранять `proxy_set_header Host $http_host;`. Внешняя ступень должна устанавливать `proxy_set_header X-Forwarded-Proto $scheme;`. В доменном блоке на 80 должно быть `server_name nodecor.ru www.nodecor.ru;`: если `www` ещё не указан, добавьте только этот алиас в конфигурацию данного сайта, затем выполните `sudo nginx -t` и `sudo systemctl reload nginx`. Не заменяйте конфигурации соседних проектов. Для `www` также нужна действующая DNS-запись.
+
 ## HTTPS без домена
 
 Для публичного IP и HTTPS на `:5555` используйте [пошаговую инструкцию](INSTALL-IP-HTTPS.md). Она сохраняет локальный Docker на 8080 и предусматривает автоматическое продление IP-сертификата без остановки других проектов.

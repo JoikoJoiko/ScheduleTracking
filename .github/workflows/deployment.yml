@@ -39,8 +39,10 @@ jobs:
             if curl -fsS -H "Host: $TEST_HOST:5555" http://127.0.0.1:5555/healthz; then break; fi
             sleep 1
           done
-          for path in /healthz /api/meta /static/app.js /admin/login/; do
-            curl -fsS -H "Host: $TEST_HOST:5555" "http://127.0.0.1:5555$path" > /dev/null
+          for host in "$TEST_HOST:5555" nodecor.ru www.nodecor.ru; do
+            for path in /healthz /api/meta /static/app.js /admin/login/; do
+              curl -fsS -H "Host: $host" "http://127.0.0.1:5555$path" > /dev/null
+            done
           done
           curl -fsS -c /tmp/schedule-cookies -H "Host: $TEST_HOST:5555" http://127.0.0.1:5555/admin/login/ > /dev/null
           csrf=$(awk '$6=="schedule_csrftoken" {print $7}' /tmp/schedule-cookies)
