@@ -180,6 +180,25 @@ class ManualAndRoomTests(TestCase):
                 ('спорт. зал',(1,'1 корпус · Основной')),('01',(None,'1 корпус · Основной')),('Акт.',(None,None)),('А.з.о',(None,'1 корпус · Общежитие')),('101б',(1,None))]:
             with self.subTest(number=number):self.assertEqual(location_from_number(number),expected)
 
+    def test_named_rooms_defaults_and_existing_data_upgrade(self):
+        from .room_locations import location_from_number
+        from importlib import import_module
+        from types import SimpleNamespace
+        from django.apps import apps
+        from django.db import connection
+        rooms=[]
+        for name,floor in [('А.з.',1),('А.з',1),('Библ',2),('Библ.',2)]:
+            self.assertEqual(location_from_number(name),(floor,'1 корпус · Основной'))
+            rooms.append((Room.objects.create(number=name,building=self.building,room_type=self.type),floor))
+        dorm=Room.objects.create(number='А.з.о',building=self.building,room_type=self.type)
+        self.room.floor=4;self.room.save()
+        import_module('schedule.migrations.0015_named_room_locations').fill_named_rooms(apps,SimpleNamespace(connection=connection))
+        for room,floor in rooms:
+            room.refresh_from_db();self.assertEqual(room.floor,floor)
+            self.assertEqual(room.campus.name,'1 корпус · Основной')
+        dorm.refresh_from_db();self.assertIsNone(dorm.floor);self.assertIsNone(dorm.campus_id)
+        self.room.refresh_from_db();self.assertEqual(self.room.floor,4)
+
     def test_infer_location_is_explicit_root_only_and_preserves_manual_values(self):
         room=Room.objects.create(number='104о',building=self.building,room_type=self.type)
         self.client.force_login(self.admin)

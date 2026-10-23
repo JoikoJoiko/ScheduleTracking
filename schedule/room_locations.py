@@ -5,6 +5,9 @@ from .models import RoomCampus
 
 def location_from_number(number):
     code=re.sub(r'[\s.\-]+','',number.casefold())
+    # Named rooms share the same defaults for every spelling used in Excel.
+    if code=='аз':return 1,'1 корпус · Основной'
+    if code in ['библ','библиотека']:return 2,'1 корпус · Основной'
     numeric=re.match(r'^(\d{3})(?!\d)',code)
     floor=int(numeric[1])//100 if numeric else None
     if re.fullmatch(r'(?:сзал|спортзал|спортивныйзал)\d*',code):
