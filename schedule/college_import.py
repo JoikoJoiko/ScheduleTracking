@@ -161,6 +161,7 @@ def ensure_period(metadata):
 
 
 def materialize(rows,metadata,period):
+    from .room_locations import fill_room_location
     building,_=Building.objects.get_or_create(name='Колледж')
     room_type,_=RoomType.objects.get_or_create(name='Кабинет')
     groups={}
@@ -169,12 +170,14 @@ def materialize(rows,metadata,period):
             'admission_year':raw['admission_year'],'graduation_year':raw['admission_year']+4})
         GroupYear.objects.update_or_create(group=group,year=period.year,defaults={'course':raw['course'],'status':'active'})
         groups[group.name]=group
-    payload=[]
+    payload=[];located=set()
     for row in rows:
         slot=TimeSlot.objects.get(sort_order=row['slot'])
         group=groups[row['group']]
         subgroup=Subgroup.objects.get_or_create(group=group,name=row['subgroup'])[0] if row['subgroup'] else None
         room=Room.objects.get_or_create(building=building,number=row['room'],defaults={'room_type':room_type})[0]
+        if room.pk not in located:
+            fill_room_location(room);located.add(room.pk)
         teacher=Teacher.objects.get_or_create(name=row['teacher'])[0]
         curricular=row['slot']!=0
         subject=Subject.objects.get_or_create(name=row['subject'],defaults={'is_curricular':curricular})[0]

@@ -125,6 +125,26 @@ test('original lesson and combined-group labels escape imported text',()=>{
     assert.match(html,/&lt;img src=x onerror=alert\(1\)&gt;/);assert.match(html,/A&amp;B/);
 });
 
+test('room grouping uses configured campus and floor, including zero and unassigned rooms',()=>{
+    const p=page();
+    vm.runInContext(`var roomRows=[{id:1,number:'210п',campus_id:1,campus:'Главный',floor:0},
+        {id:2,number:'201',campus_id:1,campus:'Главный',floor:2},{id:3,number:'411',campus_id:null,campus:'',floor:null}]`,p.context);
+    const groups=JSON.parse(vm.runInContext("JSON.stringify(roomGroups(roomRows,'campus_floor'))",p.context));
+    assert.deepEqual(groups.map(g=>g.title),['Главный · 0 этаж','Главный · 2 этаж','Корпус не указан · Этаж не указан']);
+    assert.equal(vm.runInContext("roomGroups(roomRows,'campus').length",p.context),2);
+    assert.equal(vm.runInContext("roomGroups(roomRows,'').length",p.context),1);
+});
+
+test('download and print links keep the viewed date and expose the two-week base export',()=>{
+    const p=page();
+    const html=vm.runInContext("exportControls('groups',5,'2026-10-23','week')",p.context);
+    assert.match(html,/\/exports\/groups\/5/);assert.match(html,/date=2026-10-23/);
+    assert.match(html,/view=week/);assert.match(html,/format=docx/);assert.match(html,/format=print/);
+    assert.match(html,/view=base/);assert.match(html,/target="_blank" rel="noopener"/);
+    const changes=vm.runInContext("exportControls('changes',null,'2026-10-23','day',7)",p.context);
+    assert.match(changes,/group=7/);assert.doesNotMatch(changes,/view=base/);
+});
+
 const shortScheme=()=>({lessonCount:3,lessonMinutes:40,start:'08:00',keepBreaks:true,breakMinutes:'',
     regular:[{number:1,start:'08:00',end:'09:30'},{number:2,start:'09:40',end:'11:10'},{number:3,start:'11:40',end:'13:10'}],
     rows:[{number:1,lessonMinutes:'',breakMinutes:5},{number:2,lessonMinutes:'',breakMinutes:25},

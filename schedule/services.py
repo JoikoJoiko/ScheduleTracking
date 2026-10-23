@@ -438,13 +438,14 @@ def availability(date, start, end, rooms=None):
     finish = timezone.make_aware(datetime.combine(date, end))
     has_data = version_on(date) is not None
     result = []
-    for room in rooms if rooms is not None else Room.objects.select_related('building', 'room_type'):
+    for room in rooms if rooms is not None else Room.objects.select_related('building', 'room_type','campus'):
         own = [x for x in lessons if x['room_id'] == room.pk]
         busy = [x for x in own if overlaps(start.isoformat(timespec='minutes'), end.isoformat(timespec='minutes'), x['start'], x['end'])]
         blocked = [b for b in blocks if b.room_id == room.pk and overlaps(begin, finish, b.start_at, b.end_at)]
         status = 'unavailable' if not room.is_active or not room.building.is_active or blocked else 'busy' if busy else 'free' if has_data else 'unknown'
         result.append({'id':room.pk, 'number':room.number, 'building_id':room.building_id, 'building':room.building.name,
-            'floor':room.floor, 'capacity':room.capacity, 'room_type':room.room_type.name, 'room_type_id':room.room_type_id,
+            'floor':room.floor,'campus_id':room.campus_id,'campus':room.campus.name if room.campus else '',
+            'capacity':room.capacity, 'room_type':room.room_type.name, 'room_type_id':room.room_type_id,
             'description':room.description, 'status':status, 'lessons':busy, 'blocks':[b.reason for b in blocked],
             'next':next((x for x in own if x['start'] >= end.isoformat(timespec='minutes')), None)})
     return result

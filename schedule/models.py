@@ -61,10 +61,18 @@ class RoomType(Named):
         verbose_name_plural = 'Типы помещений'
 
 
+class RoomCampus(Named):
+    name=models.CharField('Название',max_length=100,unique=True)
+    class Meta(Named.Meta):
+        verbose_name='Корпус кабинетов'
+        verbose_name_plural='Корпуса кабинетов'
+
+
 class Room(models.Model):
     number = models.CharField('Номер', max_length=60)
     building = models.ForeignKey(Building, on_delete=models.PROTECT, verbose_name='Корпус')
     floor = models.IntegerField('Этаж', null=True, blank=True)
+    campus = models.ForeignKey(RoomCampus,on_delete=models.PROTECT,null=True,blank=True,verbose_name='Корпус для отображения')
     capacity = models.PositiveIntegerField('Вместимость', null=True, blank=True)
     room_type = models.ForeignKey(RoomType, on_delete=models.PROTECT, verbose_name='Тип помещения')
     description = models.TextField('Описание и оснащение', blank=True)
@@ -467,9 +475,9 @@ class SystemSetting(models.Model):
 
 
 class ImageImport(models.Model):
-    image = models.ImageField('Изображение', upload_to='changes/%Y/%m/')
+    image = models.ImageField('Изображение', upload_to='changes/%Y/%m/',blank=True)
     target_date = models.DateField('Дата замен')
-    layout = models.CharField('Формат', max_length=12, choices=[('table','Таблица замен'),('yellow','Жёлтые ячейки')])
+    layout = models.CharField('Формат', max_length=12, choices=[('table','Таблица замен'),('yellow','Жёлтые ячейки'),('manual','Ручной ввод')])
     payload = models.JSONField('Распознанные строки', default=list, blank=True)
     warnings = models.JSONField('Предупреждения', default=list, blank=True)
     status = models.CharField('Статус', max_length=12, default='review', choices=[('review','Проверка'),('published','Опубликовано'),('cancelled','Отменено')])
@@ -477,6 +485,6 @@ class ImageImport(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         verbose_name = 'Загрузка замен'
-        verbose_name_plural = 'Замены из изображений'
+        verbose_name_plural = 'Загрузки и ручные замены'
     def __str__(self):
         return f'{self.target_date} · {self.get_layout_display()}'

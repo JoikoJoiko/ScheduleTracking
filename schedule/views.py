@@ -90,13 +90,16 @@ def meta(request):
     change=Change.objects.filter(status='published').order_by('-published_at').first()
     stamps=[x.published_at for x in [version,change] if x]
     last_operation=AuditLog.objects.filter(action__in=['publish_version','publish_change','withdraw_change','rollback_version','activate_year',
-        'edit_bells','reset_bells','edit_short_day','disable_short_day','edit_practice','disable_practice','repair_class_hours']).first()
+        'edit_bells','reset_bells','edit_short_day','disable_short_day','edit_practice','disable_practice','repair_class_hours',
+        'create_room_campus','edit_room_place']).first()
     if last_operation:
         stamps.append(last_operation.created_at)
     organization=SystemSetting.objects.filter(key='organization').values_list('value',flat=True).first() or 'Расписание колледжа'
     return JsonResponse({'organization':organization,'version':settings.SITE_VERSION,'today':timezone.localdate().isoformat(),'now':timezone.localtime().isoformat(),
         'updated_at':max(stamps).isoformat() if stamps else None,
         'buildings':list(Building.objects.values('id','name')),
+        'room_campuses':list(RoomCampus.objects.values('id','name')),
+        'room_floors':list(Room.objects.exclude(floor=None).order_by('floor').values_list('floor',flat=True).distinct()),
         'room_types':list(RoomType.objects.values('id','name')),
         'specialties':list(Specialty.objects.values('id','name','code')),
         'slots':bells_for(selected_date(request)),
@@ -259,8 +262,8 @@ def room_availability(request):
             raise ValidationError('Для этой пары не задано время звонков')
     if start>=end:
         raise ValidationError('Время окончания должно быть позже начала в пределах одного дня')
-    rooms=Room.objects.select_related('building','room_type')
-    for query,field in [('building','building_id'),('floor','floor'),('type','room_type_id')]:
+    rooms=Room.objects.select_related('building','room_type','campus')
+    for query,field in [('building','building_id'),('campus','campus_id'),('floor','floor'),('type','room_type_id')]:
         if request.GET.get(query):
             rooms=rooms.filter(**{field:int(request.GET[query])})
     if request.GET.get('capacity'):
@@ -271,6 +274,10 @@ def room_availability(request):
     rows=svc.availability(day,start,end,rooms)
     if request.GET.get('status'):
         rows=[r for r in rows if r['status']==request.GET['status']]
+    grouping=request.GET.get('group_by')
+    if grouping in ['campus','floor','campus_floor']:
+        rows.sort(key=lambda r:((r['campus'] or '\uffff') if grouping!='floor' else '',
+            r['floor'] if r['floor'] is not None else 999,r['number']))
     if request.GET.get('grid')=='1':
         grid={room.pk:[] for room in rooms}
         for slot in bells_for(day):

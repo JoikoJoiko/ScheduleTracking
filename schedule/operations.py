@@ -8,9 +8,80 @@ from django.forms import formset_factory,BaseFormSet
 from django.forms.models import model_to_dict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-from .models import TimeSlot, WeekdayBell, CuratorBell, ShortenedDay,ShortenedBell, PracticePeriod, WEEKDAYS
+from .models import TimeSlot, WeekdayBell, CuratorBell, ShortenedDay,ShortenedBell, PracticePeriod, WEEKDAYS,Room,RoomCampus,ImageImport
 from . import services
 from .timing import regular_bell_times, shortened_times
+
+
+class ManualChangesForm(forms.Form):
+    date=forms.DateField(label='Дата замен',widget=forms.DateInput(attrs={'type':'date'},format='%Y-%m-%d'))
+    row_count=forms.IntegerField(label='Строк',min_value=1,max_value=100,initial=20)
+
+
+def manual_changes(request,site):
+    form=ManualChangesForm(request.POST or None,initial={'date':timezone.localdate()})
+    if request.method=='POST' and form.is_valid():
+        if form.cleaned_data['date'].weekday()==6:
+            form.add_error('date','Воскресенье не входит в учебную неделю')
+        else:
+            batch=ImageImport.objects.create(target_date=form.cleaned_data['date'],layout='manual',
+                payload=[{} for _ in range(form.cleaned_data['row_count'])],uploaded_by=request.user)
+            services.audit(request.user,'create_manual_changes',batch)
+            return redirect('admin:schedule_image_review',pk=batch.pk)
+    return render(request,'admin/manual_changes.html',dict(site.each_context(request),title='Новые замены',form=form))
+
+
+class RoomPlaceForm(forms.Form):
+    room=forms.ModelChoiceField(Room.objects.all(),widget=forms.HiddenInput)
+    campus=forms.ModelChoiceField(RoomCampus.objects.all(),required=False,label='Корпус')
+    floor=forms.IntegerField(required=False,min_value=-10,max_value=100,label='Этаж')
+
+
+class RoomCampusForm(forms.ModelForm):
+    class Meta:
+        model=RoomCampus
+        fields=['name']
+
+
+def room_places(request,site):
+    root_only(request)
+    rooms=list(Room.objects.select_related('building','campus'))
+    Set=formset_factory(RoomPlaceForm,extra=0,max_num=1000,validate_max=True)
+    rows=Set(request.POST if request.method=='POST' and request.POST.get('action')=='rooms' else None,
+        initial=[{'room':r.pk,'campus':r.campus_id,'floor':r.floor} for r in rooms])
+    campus=RoomCampusForm(request.POST if request.method=='POST' and request.POST.get('action')=='campus' else None)
+    if request.method=='POST':
+        if request.POST.get('action')=='infer':
+            from .room_locations import fill_room_location
+            count=0
+            with transaction.atomic():
+                for room in Room.objects.select_for_update():
+                    old={'campus_id':room.campus_id,'floor':room.floor}
+                    if fill_room_location(room):
+                        services.audit(request.user,'edit_room_place',room,old,{'campus_id':room.campus_id,'floor':room.floor})
+                        count+=1
+            messages.success(request,f'Заполнено кабинетов: {count}')
+            return redirect('admin:room_places')
+        if request.POST.get('action')=='campus' and campus.is_valid():
+            item=campus.save();services.audit(request.user,'create_room_campus',item)
+            return redirect('admin:room_places')
+        if request.POST.get('action')=='rooms' and rows.is_valid():
+            submitted=[f.cleaned_data['room'].pk for f in rows]
+            if len(submitted)!=len(set(submitted)) or set(submitted)!={r.pk for r in rooms}:
+                rows._non_form_errors=rows.error_class(['Список кабинетов изменился. Обновите страницу.'])
+            else:
+                with transaction.atomic():
+                    for form in rows:
+                        data=form.cleaned_data;room=Room.objects.select_for_update().get(pk=data['room'].pk)
+                        old={'campus_id':room.campus_id,'floor':room.floor}
+                        room.campus=data['campus'];room.floor=data['floor']
+                        if old!={'campus_id':room.campus_id,'floor':room.floor}:
+                            room.save(update_fields=['campus','floor'])
+                            services.audit(request.user,'edit_room_place',room,old,{'campus_id':room.campus_id,'floor':room.floor})
+                messages.success(request,'Группировка кабинетов сохранена')
+                return redirect('admin:room_places')
+    return render(request,'admin/room_places.html',dict(site.each_context(request),title='Корпуса и этажи',
+        rows=rows,items=list(zip(rows,rooms)),campus_form=campus))
 
 
 class BellRowForm(forms.Form):

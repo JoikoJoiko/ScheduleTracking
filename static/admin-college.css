@@ -12,3 +12,5 @@ body{font-family:"Segoe UI",Arial,sans-serif}#header{padding:24px 36px;border-bo
 .conflict-approved{padding:14px 16px;border:1px solid #58b38c;border-radius:8px;margin:15px 0}.conflict-approved p{font-size:12px;line-height:1.8}
 
 .bell-auto-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0}.bell-auto-controls label{display:flex;align-items:center;gap:7px;font-size:12px}.bell-auto-controls input[type=number],#weekday-bell-table input[data-bell-break]{max-width:76px;box-sizing:border-box}.review-week{color:var(--link-fg)}[data-bell-status]{font-size:12px;color:var(--error-fg)}
+
+.image-review.manual-review{display:block}.manual-review .review-table{width:100%}

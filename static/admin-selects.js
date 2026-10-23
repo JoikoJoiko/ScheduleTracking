@@ -1,7 +1,7 @@
 'use strict';
 // Keep native selects for validation and POST; search only filters the popup locally.
 let activePicker;
-document.querySelectorAll('.operation-form select,.review-table select').forEach((select,index) => {
+document.querySelectorAll('.operation-form select,.review-table select,.room-place-form select').forEach((select,index) => {
     const trigger=document.createElement('button');trigger.type='button';trigger.className='admin-picker';
     const label=select.closest('label')?.firstChild?.textContent?.trim()||select.getAttribute('aria-label')||select.name.split('-').at(-1);
     trigger.setAttribute('aria-label',label);trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');

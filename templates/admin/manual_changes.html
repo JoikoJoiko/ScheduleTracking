@@ -1,0 +1,2 @@
+{% extends "admin/base_site.html" %}
+{% block content %}<section class="operations-card"><h2>Новые замены</h2><form method="post" class="operation-form">{% csrf_token %}{{ form.non_field_errors }}{% for field in form %}<label>{{ field.label }}{{ field }}{{ field.errors }}</label>{% endfor %}<button class="button default" type="submit">Заполнить замены →</button></form></section>{% endblock %}

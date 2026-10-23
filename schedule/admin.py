@@ -265,7 +265,7 @@ class AuditAdmin(SafeAdmin):
         return False
 
 
-for model in [Period, Building, RoomType, Teacher, Specialty, StudentGroup, GroupYear, Subgroup, Subject, CalendarDay, StaffScope, ImportProfile, SystemSetting]:
+for model in [Period, Building, RoomCampus, RoomType, Teacher, Specialty, StudentGroup, GroupYear, Subgroup, Subject, CalendarDay, StaffScope, ImportProfile, SystemSetting]:
     admin.site.register(model,SafeAdmin)
 
 
@@ -385,6 +385,9 @@ class ImageAdmin(SafeAdmin):
         from django.shortcuts import get_object_or_404
         from django.http import FileResponse
         batch=get_object_or_404(self.get_queryset(request),pk=pk)
+        if not batch.image:
+            from django.http import Http404
+            raise Http404('У ручных замен нет изображения')
         return FileResponse(batch.image.open('rb'),content_type='image/png')
     def fragment(self,request,pk,index):
         from django.shortcuts import get_object_or_404
@@ -400,7 +403,7 @@ class ImageAdmin(SafeAdmin):
         from django.forms import formset_factory
         from .image_import import publish_review,infer_row,ImageReviewConflicts
         batch=get_object_or_404(self.get_queryset(request),pk=pk)
-        if request.method=='POST' and request.POST.get('reanalyze') and batch.status=='review':
+        if request.method=='POST' and request.POST.get('reanalyze') and batch.status=='review' and batch.image:
             from .image_import import analyze
             from django.db import transaction
             from PIL import Image
@@ -444,8 +447,16 @@ class ImageAdmin(SafeAdmin):
                 'kind':row.get('kind','replace'),'subject':picked('subject'),
                 'teacher':picked('teacher'),'room':picked('room')})
         FormSet=formset_factory(ImageRowForm,extra=3,max_num=250,validate_max=True,can_delete=True)
-        formset=FormSet(request.POST or None,initial=initial,form_kwargs={'target_date':batch.target_date})
-        if request.method=='POST' and batch.status=='review':
+        post=request.POST or None
+        adding=request.method=='POST' and request.POST.get('add_rows') and batch.status=='review'
+        if adding:
+            post=request.POST.copy()
+            try:
+                post['form-TOTAL_FORMS']=str(min(250,max(0,int(post.get('form-TOTAL_FORMS',0)))+5))
+            except ValueError:
+                post['form-TOTAL_FORMS']='0'
+        formset=FormSet(post,initial=initial,form_kwargs={'target_date':batch.target_date})
+        if request.method=='POST' and batch.status=='review' and not adding:
             if request.POST.get('cancel'):
                 batch.status='cancelled';batch.save();services.audit(request.user,'cancel_image',batch)
                 return redirect('admin:schedule_imageimport_changelist')
@@ -463,6 +474,8 @@ class ImageAdmin(SafeAdmin):
                 try:
                     publish_review(batch,rows,request.user)
                     self.message_user(request,'Замены опубликованы',messages.SUCCESS)
+                    if batch.layout=='manual':
+                        return redirect('admin:schedule_image_review',pk=batch.pk)
                     return redirect('admin:schedule_imageimport_changelist')
                 except ImageReviewConflicts as exc:
                     review_conflicts=exc.conflicts

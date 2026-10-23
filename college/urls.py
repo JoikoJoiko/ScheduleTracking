@@ -1,8 +1,11 @@
 from django.contrib import admin
 from django.urls import path, re_path
 from schedule import views as v
+from schedule import exports
 
 urlpatterns = [
+    path('exports/groups/<int:pk>',exports.export,{'kind':'groups'}),
+    path('exports/changes',exports.export,{'kind':'changes'}),
     path('healthz',v.health),
     path('admin/conflicts/',v.conflicts_page),
     path('admin/',admin.site.urls),

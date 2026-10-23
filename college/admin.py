@@ -19,6 +19,8 @@ class CollegeAdminSite(AdminSite):
     def get_urls(self):
         from schedule import dashboard,operations
         return [
+            path('changes/new/',self.admin_view(lambda request:operations.manual_changes(request,self)),name='manual_changes'),
+            path('rooms/grouping/',self.admin_view(lambda request:operations.room_places(request,self)),name='room_places'),
             path('bells/',self.admin_view(lambda request:operations.bells_editor(request,self)),name='bells_editor'),
             path('practices/',self.admin_view(lambda request:operations.practices_editor(request,self)),name='practices_editor'),
             path('advanced/',self.admin_view(self.advanced),name='advanced_settings'),
