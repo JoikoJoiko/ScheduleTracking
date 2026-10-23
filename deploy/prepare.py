@@ -30,6 +30,10 @@ def valid_domain(value):
 
 def prepare(domain, port=8080, root=ROOT, *, scheme='https', public_port=None, reconfigure=False):
     domain = valid_domain(domain)
+    try:
+        ipaddress.IPv4Address(domain);is_ip=True
+    except ipaddress.AddressValueError:
+        is_ip=False
     if scheme not in ('http','https'):
         raise ValueError('Scheme must be http or https')
     public_port=public_port if public_port is not None else (5555 if scheme=='http' else 443)
@@ -37,8 +41,8 @@ def prepare(domain, port=8080, root=ROOT, *, scheme='https', public_port=None, r
         raise ValueError('Local backend port must be between 1024 and 65535')
     if scheme=='http' and not 1024<=public_port<=65535:
         raise ValueError('HTTP test port must be between 1024 and 65535')
-    if scheme=='https' and public_port!=443:
-        raise ValueError('--public-port is for HTTP testing; configure custom HTTPS in your existing Nginx site')
+    if scheme=='https' and public_port!=443 and not (is_ip and 1024<=public_port<=65535):
+        raise ValueError('HTTPS uses port 443 for domains; IP HTTPS also supports ports 1024–65535')
     if port==public_port:
         raise ValueError('Public Nginx port must differ from the local Docker port')
     origin=f'{scheme}://{domain}'+(f':{public_port}' if (scheme,public_port)!=('https',443) else '')
@@ -83,6 +87,26 @@ def prepare(domain, port=8080, root=ROOT, *, scheme='https', public_port=None, r
              else f'# Enable this site, then use certbot --nginx -d {domain} for HTTPS.')
     site=site.replace('__LISTEN_PORT__',str(public_port if scheme=='http' else 80)).replace('__COMMENT__',comment)
     site = site.replace('__LOCATION__','\n'.join('    '+line if line else '' for line in location.splitlines()))
+    if scheme=='https' and is_ip:
+        origin=f'https://{domain}'+(f':{public_port}' if public_port!=443 else '')
+        certificate=f'/etc/letsencrypt/live/schedule-ip-{domain}'
+        site=(f'# IP certificate: follow INSTALL-IP-HTTPS.md before enabling this file.\nserver {{\n'
+              f'    listen {public_port} ssl;\n    server_name {domain};\n'
+              f'    ssl_certificate {certificate}/fullchain.pem;\n    ssl_certificate_key {certificate}/privkey.pem;\n'
+              f'    ssl_protocols TLSv1.2 TLSv1.3;\n    error_page 497 =308 {origin}$request_uri;\n'
+              +'\n'.join('    '+line if line else '' for line in location.splitlines())+'\n}\n')
+        (output/'acme-location.conf').write_text(
+            '# Include only in the existing port-80 server answering this IP.\n'
+            'location ^~ /.well-known/acme-challenge/ {\n    root /var/lib/letsencrypt/schedule;\n'
+            '    default_type text/plain;\n    try_files $uri =404;\n}\n',encoding='utf-8',newline='\n')
+        service=('[Unit]\nDescription=Renew ScheduleTracking IP certificate\nAfter=network-online.target nginx.service\n\n'
+            '[Service]\nType=oneshot\nPrivateTmp=true\nTimeoutStartSec=300\n'
+            f'ExecStart=/opt/schedule-certbot/bin/certbot renew --cert-name schedule-ip-{domain} --non-interactive '
+            '--deploy-hook "/usr/sbin/nginx -t && /usr/bin/systemctl reload nginx"\n')
+        (output/'schedule-ip-certificate.service').write_text(service,encoding='utf-8',newline='\n')
+        (output/'schedule-ip-certificate.timer').write_text(
+            '[Unit]\nDescription=Check ScheduleTracking IP certificate every hour\n\n[Timer]\nOnCalendar=hourly\n'
+            'RandomizedDelaySec=300\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n',encoding='utf-8',newline='\n')
     (output/'location.conf').write_text(location,encoding='utf-8',newline='\n')
     (output/'nginx.conf').write_text(site,encoding='utf-8',newline='\n')
     return domain, output
@@ -93,7 +117,7 @@ def main():
     parser.add_argument('domain',help='DNS name or IPv4 address, without scheme or port')
     parser.add_argument('--port',type=int,default=8080,help='Local backend port (default: 8080)')
     parser.add_argument('--scheme',choices=['https','http'],default='https',help='Public transport; HTTP is for trusted-network tests')
-    parser.add_argument('--public-port',type=int,help='Public HTTP test port (default: 5555)')
+    parser.add_argument('--public-port',type=int,help='Public port: HTTP defaults to 5555; HTTPS/IP also accepts a custom port')
     parser.add_argument('--reconfigure',action='store_true',help='Change existing connection settings without replacing secrets')
     args=parser.parse_args()
     try:

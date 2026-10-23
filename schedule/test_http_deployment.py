@@ -64,7 +64,7 @@ class HttpPreparationTests(SimpleTestCase):
         values=dict(line.split('=',1) for line in (self.root/'.env.nginx').read_text().splitlines())
         self.assertEqual(values['DEPLOY_SCHEME'],'https')
         self.assertEqual(values['PUBLIC_ORIGIN'],f'https://{IP}')
-        self.assertIn('listen 80;',(output/'nginx.conf').read_text())
+        self.assertIn('listen 443 ssl;',(output/'nginx.conf').read_text())
 
     def test_http_default_external_port_is_5555_and_backend_can_be_changed(self):
         _,output=prepare(IP,9080,self.root,scheme='http')

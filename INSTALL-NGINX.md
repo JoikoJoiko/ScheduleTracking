@@ -160,3 +160,6 @@ dc=(docker compose --env-file .env.nginx -f compose.nginx.yaml)
 Сценарии генерации конфигурации, резервирования и ошибок проверяются автоматическими тестами. Тесты с `DEBUG=0` проверяют реальный вход в админку, cookies и CSRF для обоих режимов. Workflow `.github/workflows/deployment.yml` на Linux поднимает Docker-стек в матрице HTTPS/HTTP, проверяет Nginx, статику, OCR и резервирование. В HTTP-прогоне дополнительный внешний Nginx слушает 5555 и проверяется вместе с обеими ступенями прокси, портом в Host и CSRF Origin. На локальной машине без Docker сборку контейнеров выполнить нельзя — перед включением сайта запустите `up` и проверьте его на своём сервере.
 
 Использованы стандартные механизмы [готовности Docker Compose](https://docs.docker.com/compose/how-tos/startup-order/), [проксирования Nginx](https://nginx.org/en/docs/http/ngx_http_proxy_module.html) и [доверенных заголовков Waitress](https://docs.pylonsproject.org/projects/waitress/en/stable/reverse-proxy.html).
+## HTTPS без домена
+
+Для публичного IP и HTTPS на `:5555` используйте [пошаговую инструкцию](INSTALL-IP-HTTPS.md). Она сохраняет локальный Docker на 8080 и предусматривает автоматическое продление IP-сертификата без остановки других проектов.
