@@ -63,3 +63,26 @@ def schedule_coverage(kind, obj, day):
     previous = versions.order_by('-effective_to').first()
     return {'has_data': False, 'empty_reason': f'Расписание действовало по {previous.effective_to:%d.%m.%Y}.' if previous else 'Расписание ещё не загружено.',
             'next_date': None}
+
+
+def regular_assignment(group,day,subject_id,curriculum,subgroup=None,slot=None):
+    """Pick an existing teacher/room pair, never a synthetic combination or replacement."""
+    from collections import Counter
+    from .models import Lesson
+    from .timing import week_info
+    if not curriculum['version']:return None
+    version=ScheduleVersion.objects.select_related('period__year').get(pk=curriculum['version']['id'])
+    lessons=Lesson.objects.filter(version=version,subject_id=subject_id,
+        participants__group=group).distinct().select_related('time_slot').prefetch_related('participants')
+    if subgroup:
+        lessons=[l for l in lessons if any(p.group_id==group.pk and p.subgroup_id in [None,subgroup.pk] for p in l.participants.all())]
+    else:lessons=list(lessons)
+    if not lessons:return None
+    parity='odd' if week_info(day,version.period.year)['number']==1 else 'even'
+    frequency=Counter((l.teacher_id,l.room_id) for l in lessons)
+    def rank(lesson):
+        specific=subgroup and any(p.group_id==group.pk and p.subgroup_id==subgroup.pk for p in lesson.participants.all())
+        return (lesson.week_type in ['all',parity],bool(specific),lesson.day_of_week==day.weekday(),
+            lesson.time_slot.sort_order==slot,frequency[(lesson.teacher_id,lesson.room_id)],-lesson.pk)
+    lesson=max(lessons,key=rank)
+    return {'teacher_id':lesson.teacher_id,'room_id':lesson.room_id}

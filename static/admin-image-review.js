@@ -56,6 +56,32 @@ document.querySelectorAll('.review-table tbody tr').forEach(row => {
     const field = name => row.querySelector(`select[name$="-${name}"]`);
     const status = row.querySelector('.candidate-status');
     let revision = 0;
+    if(row.closest?.('.manual-review')) {
+        const suggest = async () => {
+            const current=++revision,group=field('group').value,subject=field('subject').value;
+            if(!group || !subject || field('kind').value==='cancel'){status.textContent='';return;}
+            const before={teacher:field('teacher').value,room:field('room').value};
+            const query=new URLSearchParams({group,subject_id:subject,subgroup:field('subgroup').value,
+                date:row.closest('table').dataset.date,slot:row.querySelector('input[name$="-slot"]').value});
+            status.textContent='Подбор по расписанию…';
+            try {
+                const response=await fetch('/api/admin/image-candidates?'+query,{headers:{Accept:'application/json'}});
+                const data=await response.json();
+                if(current!==revision || reviewRowDeleted(row) || field('kind').value==='cancel')return;
+                if(!response.ok)throw new Error(data.error?.message || 'Ошибка подбора');
+                for(const name of ['teacher','room']) {
+                    // A late response must not erase edits made while the request was running.
+                    if(data.defaults?.[name+'_id'] && field(name).value===before[name]) {
+                        field(name).value=String(data.defaults[name+'_id']);
+                        field(name).dispatchEvent(new Event('change',{bubbles:true}));
+                    }
+                }
+                status.textContent=data.defaults?'Из обычного расписания':'В обычном расписании нет подходящего занятия';
+            } catch(error) {if(current===revision)status.textContent=error.message;}
+        };
+        field('subject').addEventListener('change',suggest);
+        field('subgroup').addEventListener('change',suggest);
+    }
     field('group').addEventListener('change', async () => {
         const current = ++revision, group = field('group').value;
         const checked = row.querySelector('input[name$="-use"]');

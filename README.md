@@ -22,7 +22,7 @@ python -m venv venv
 
 Для последующих запусков: ` .\start.ps1`. Скрипт устанавливает зависимости, применяет миграции и запускает сервер. Активация виртуального окружения не требуется. На Linux/macOS используйте `python3 -m venv venv` и `venv/bin/python` вместо пути Windows.
 
-Текущая версия — `2.1.2`, номер хранится в `VERSION` и виден в подвале. [Список изменений](CHANGELOG.md). [HTTPS по IP](INSTALL-IP-HTTPS.md). Звонки: `/admin/bells/`, практики: `/admin/practices/`, технические справочники: `/admin/advanced/`.
+Текущая версия — `2.1.3`, номер хранится в `VERSION` и виден в подвале. [Список изменений](CHANGELOG.md). [HTTPS по IP](INSTALL-IP-HTTPS.md). Звонки: `/admin/bells/`, практики: `/admin/practices/`, технические справочники: `/admin/advanced/`.
 
 ## Возможности
 

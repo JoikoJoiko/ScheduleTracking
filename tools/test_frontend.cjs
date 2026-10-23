@@ -179,9 +179,9 @@ test('public short-day caption uses the complete schedule label',()=>{
     assert.match(html,/4 пары по 40 мин/);
 });
 
-function reviewPage(values) {
+function reviewPage(values,runtime={}) {
     const control=(value='')=>({value,checked:false,disabled:false,textContent:'',events:{},
-        addEventListener(name,handler){this.events[name]=handler;}});
+        addEventListener(name,handler){this.events[name]=handler;},dispatchEvent(event){this.events[event.type]?.(event);}});
     const selectAll=control(),removeEmpty=control(),status=control(),events={};
     const controls={'[data-review-select-all]':selectAll,'[data-review-remove-empty]':removeEmpty,'[data-review-status]':status};
     const form={querySelector:selector=>controls[selector]};
@@ -193,15 +193,35 @@ function reviewPage(values) {
         fields.allow_teacher_overlap.checked=!!values.allow_teacher_overlap;
         fields.group.name=`form-${index}-group`;
         const row={fields,dataset:{hasSource:values.source?'1':''},hidden:false,
+            closest:selector=>selector==='.manual-review'?(values.manual?{}:null):selector==='table'?table:null,
             querySelector(selector){return selector==='.candidate-status'?control():fields[selector.match(/-([A-Za-z_]+)"/)[1]];}};
         Object.entries(fields).forEach(([name,field])=>{field.name=`form-${index}-${name}`;field.closest=()=>row;});
         return row;
     });
-    const table={tBodies:[{rows}],closest:()=>form,addEventListener:(name,handler)=>{events[name]=handler;}};
+    const table={dataset:{date:'2026-10-23'},tBodies:[{rows}],closest:()=>form,addEventListener:(name,handler)=>{events[name]=handler;}};
     const document={querySelectorAll:selector=>selector==='.review-table'?[table]:rows};
-    vm.runInNewContext(fs.readFileSync('static/admin-image-review.js','utf8'),{document});
+    vm.runInNewContext(fs.readFileSync('static/admin-image-review.js','utf8'),{document,URLSearchParams,Event:class {constructor(type){this.type=type;}},...runtime});
     return {rows,selectAll,removeEmpty,status,events};
 }
+
+test('manual subject choice fills normal teacher and room but preserves an edit during the request',async()=>{
+    let resolve,requested;
+    const p=reviewPage([{manual:true,group:'1',subject:'4',slot:'2'}],{fetch:url=>{requested=url;return new Promise(r=>{resolve=r;});}});
+    const fields=p.rows[0].fields,pending=fields.subject.events.change();
+    fields.teacher.value='99';
+    resolve({ok:true,json:async()=>({defaults:{teacher_id:5,room_id:6}})});await pending;
+    assert.match(requested,/subject_id=4/);assert.equal(fields.teacher.value,'99');assert.equal(fields.room.value,'6');
+});
+
+test('late manual defaults cannot replace a newer subject selection',async()=>{
+    const responses=[];
+    const p=reviewPage([{manual:true,group:'1',subject:'4',slot:'2'}],{fetch:()=>new Promise(r=>responses.push(r))});
+    const fields=p.rows[0].fields,first=fields.subject.events.change();
+    fields.subject.value='7';const second=fields.subject.events.change();
+    responses[1]({ok:true,json:async()=>({defaults:{teacher_id:8,room_id:9}})});await second;
+    responses[0]({ok:true,json:async()=>({defaults:{teacher_id:5,room_id:6}})});await first;
+    assert.equal(fields.teacher.value,'8');assert.equal(fields.room.value,'9');
+});
 
 test('select all toggles populated and unresolved source rows without selecting blank extras',()=>{
     const p=reviewPage([{group:'1',slot:'1'},{},{source:true},{subject:'2'}]);

@@ -145,6 +145,15 @@ def image_candidates(request):
     svc.require_buildings(request.user,[group.building_id])
     day=selected_date(request)
     result=curriculum_for(group,day)
+    if request.GET.get('subject_id'):
+        from .curriculum import regular_assignment
+        subject_id=int(request.GET['subject_id'])
+        if subject_id not in {s['id'] for s in result['subjects']}:
+            raise ValidationError('Дисциплина отсутствует в обычном расписании группы')
+        subgroup=get_object_or_404(Subgroup,pk=request.GET['subgroup'],group=group) if request.GET.get('subgroup') else None
+        slot=int(request.GET['slot']) if request.GET.get('slot') else None
+        result['defaults']=regular_assignment(group,day,subject_id,result,subgroup,slot)
+        return JsonResponse(result,json_dumps_params={'ensure_ascii':False})
     row={key+'_text':request.GET.get(key,'')[:300] for key in ['subject','teacher','room']}
     row['slot']=int(request.GET['slot']) if request.GET.get('slot','').isdigit() else None
     result['suggestions']=infer_row(group.pk,day,row,result)
