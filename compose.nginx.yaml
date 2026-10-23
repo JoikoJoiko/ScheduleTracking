@@ -33,7 +33,8 @@ services:
       ALLOWED_HOSTS: ${DOMAIN:?Run deploy/prepare.py first},${ALLOWED_HOSTS:-},nodecor.ru,www.nodecor.ru
       DEPLOY_SCHEME: ${DEPLOY_SCHEME:-https}
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-https://${DOMAIN}}
-      CSRF_TRUSTED_ORIGINS: ${PUBLIC_ORIGIN:-https://${DOMAIN}},${CSRF_TRUSTED_ORIGINS:-},${DEPLOY_SCHEME:-https}://nodecor.ru,${DEPLOY_SCHEME:-https}://www.nodecor.ru
+      # Public TLS may terminate before the existing HTTP :5555 proxy hop.
+      CSRF_TRUSTED_ORIGINS: ${PUBLIC_ORIGIN:-https://${DOMAIN}},${CSRF_TRUSTED_ORIGINS:-},${DEPLOY_SCHEME:-https}://nodecor.ru,${DEPLOY_SCHEME:-https}://www.nodecor.ru,https://nodecor.ru,https://www.nodecor.ru
       TRUST_PROXY: "1"
       TIME_ZONE: Europe/Moscow
     depends_on:

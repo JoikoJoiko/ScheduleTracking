@@ -44,7 +44,7 @@ class DomainSettingsTests(SimpleTestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             services=json.loads(result.stdout)['services'];values=services['app']['environment']
             self.assertEqual(values['ALLOWED_HOSTS'].split(','),HOSTS)
-            self.assertEqual(values['CSRF_TRUSTED_ORIGINS'].split(','),ORIGINS)
+            self.assertEqual(values['CSRF_TRUSTED_ORIGINS'].split(','),ORIGINS+['https://nodecor.ru','https://www.nodecor.ru'])
             self.assertEqual(values['DEBUG'],'0');self.assertEqual(values['DEPLOY_SCHEME'],'http')
             self.assertEqual(values['PUBLIC_ORIGIN'],ORIGINS[0])
             self.assertFalse(services['db'].get('ports'));self.assertFalse(services['app'].get('ports'))
@@ -68,6 +68,21 @@ class DomainHttpTests(TestCase):
                         self.assertFalse(response.wsgi_request.is_secure())
                         self.assertNotIn('Strict-Transport-Security',response)
             self.assertEqual(self.client.get('/',HTTP_HOST='untrusted.example.test').status_code,400)
+
+    def test_https_origin_login_through_existing_http_proxy_hop(self):
+        origins=ORIGINS+['https://nodecor.ru','https://www.nodecor.ru']
+        with transport_override(),override_settings(ALLOWED_HOSTS=HOSTS,CSRF_TRUSTED_ORIGINS=origins):
+            for host in ['nodecor.ru','www.nodecor.ru']:
+                with self.subTest(host=host):
+                    client=Client(enforce_csrf_checks=True)
+                    headers={'HTTP_HOST':host,'HTTP_X_FORWARDED_PROTO':'http','HTTP_ORIGIN':'https://'+host}
+                    client.get('/admin/login/',**headers)
+                    data={'username':'domain-admin','password':'domain-test-password','next':'/admin/'}
+                    self.assertEqual(client.post('/admin/login/',data,**headers).status_code,403)
+                    data['csrfmiddlewaretoken']=client.cookies['schedule_csrftoken'].value
+                    self.assertEqual(client.post('/admin/login/',data,**{**headers,'HTTP_ORIGIN':'https://untrusted.example.test'}).status_code,403)
+                    self.assertEqual(client.post('/admin/login/',data,**headers).status_code,302)
+                    self.assertEqual(client.get('/admin/',**headers).status_code,200)
 
     def test_domain_logins_keep_csrf_even_if_the_intermediate_proxy_adds_port_5555(self):
         with transport_override(),override_settings(ALLOWED_HOSTS=HOSTS,CSRF_TRUSTED_ORIGINS=ORIGINS):
