@@ -139,8 +139,8 @@ test('download and print links keep the viewed date and expose the two-week base
     const p=page();
     const html=vm.runInContext("exportControls('groups',5,'2026-10-23','week')",p.context);
     assert.match(html,/\/exports\/groups\/5/);assert.match(html,/date=2026-10-23/);
-    assert.match(html,/view=week/);assert.match(html,/format=docx/);assert.match(html,/format=print/);
-    assert.match(html,/view=base/);assert.match(html,/target="_blank" rel="noopener"/);
+    assert.match(html,/view=week/);assert.match(html,/format=docx/);assert.match(html,/view=day/);
+    assert.match(html,/view=base/);assert.equal((html.match(/<a /g)||[]).length,3);
     const changes=vm.runInContext("exportControls('changes',null,'2026-10-23','day',7)",p.context);
     assert.match(changes,/group=7/);assert.doesNotMatch(changes,/view=base/);
 });

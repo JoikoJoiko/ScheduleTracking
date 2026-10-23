@@ -45,6 +45,11 @@ class ExportTests(TestCase):
         self.assertEqual([s['title'] for s in base['sections']],['1-я неделя','2-я неделя'])
         self.assertTrue(all(self.subject.name in str(s['rows']) for s in base['sections']))
         self.assertNotIn('Практика до',str(base))
+        root=self.xml(word_document(base))
+        self.assertIsNone(root.find('.//{'+W+'}pageBreakBefore'))
+        self.assertEqual(len(root.findall('.//{'+W+'}tbl')),2)
+        self.assertIn('1-я неделя',' '.join(root.itertext()))
+        self.assertIn('2-я неделя',' '.join(root.itertext()))
 
     def test_changes_export_uses_current_revision_and_dashes_for_absent_pairs(self):
         subject=Subject.objects.create(name='Новый предмет')

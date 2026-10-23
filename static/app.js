@@ -96,6 +96,7 @@ function exportControls(kind,id,day,view='week',group=null) {
     const url=kind==='groups'?'/exports/groups/'+Number(id):'/exports/changes';
     const query=new URLSearchParams({date:day,view});if(group)query.set('group',group);
     const link=(format,base=false)=>url+'?'+new URLSearchParams({...Object.fromEntries(query),format,...(base?{view:'base'}:{})});
+    if(kind==='groups')return `<details class="export-actions"><summary class="btn">Печать в Word</summary><div>${[['day','Текущий день с заменами'],['week','Расписание на неделю'],['base','Расписание на две недели']].map(([mode,label])=>`<a href="${esc(url+'?'+new URLSearchParams({date:day,view:mode,format:'docx'}))}">${label}</a>`).join('')}</div></details>`;
     return `<details class="export-actions"><summary class="btn">Печать и Word</summary><div><a href="${esc(link('print'))}" target="_blank" rel="noopener">Распечатать ${view==='day'?'день':'неделю'}</a><a href="${esc(link('docx'))}">Скачать Word</a>${kind==='groups'?`<a href="${esc(link('docx',true))}">Базовое расписание · обе недели</a><a href="${esc(link('print',true))}" target="_blank" rel="noopener">Распечатать базовое расписание</a>`:''}</div></details>`;
 }
 async function home(current) {

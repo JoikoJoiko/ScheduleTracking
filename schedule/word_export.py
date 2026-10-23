@@ -1,5 +1,7 @@
 """Small, dependency-free OOXML writer for schedule matrices."""
 import io
+import textwrap
+from copy import deepcopy
 from zipfile import ZipFile,ZIP_DEFLATED
 from xml.etree import ElementTree as ET
 
@@ -15,10 +17,10 @@ def el(name,attrs=None,text=None):
     return node
 
 
-def paragraph(text,style=None,bold=False):
+def paragraph(text,style=None,bold=False,compact=False):
     p=el('p');props=el('pPr')
     if style:props.append(el('pStyle',{'val':style}))
-    props.append(el('spacing',{'after':20,'before':0,'line':240,'lineRule':'auto'}))
+    props.append(el('spacing',{'after':0 if compact else 20,'before':0,'line':240,'lineRule':'auto'}))
     p.append(props)
     for i,line in enumerate(str(text).split('\n')):
         run=el('r')
@@ -30,19 +32,37 @@ def paragraph(text,style=None,bold=False):
 
 
 def word_document(report):
+    fit=all(s['headers'][0]=='Пара' for s in report['sections'])
+    if fit:
+        report=deepcopy(report)
+        for s in report['sections']:
+            s['rows']=[[str(cell).replace('\n',' · ') for cell in row] for row in s['rows']]
+    size=18
+    if fit:
+        # Estimate wrapped row heights, then leave room for Word's font/layout differences.
+        for size in range(18,3,-1):
+            height=90
+            for s in report['sections']:
+                height+=22 if s['title'] else 5
+                columns=len(s['headers']);widths=[55]+[719/(columns-1)]*(columns-1)
+                for row in [s['headers'],*s['rows']]:
+                    lines=max(sum(max(1,len(textwrap.wrap(line,width=max(1,int((w-4)/(size/2*.56))))))
+                        for line in str(cell).split('\n')) for w,cell in zip(widths,row))
+                    height+=lines*size/2*1.2+4
+            if height<490:break
     document=el('document');body=el('body');document.append(body)
     body.extend([paragraph(report['title'],'Title'),paragraph(report['subtitle'],'Subtitle')])
     for index,section in enumerate(report['sections']):
         if section['title']:
             p=paragraph(section['title'],'Heading1')
-            if index:p.find('{'+W+'}pPr').insert(1,el('pageBreakBefore'))
+            if index and not fit:p.find('{'+W+'}pPr').insert(1,el('pageBreakBefore'))
             body.append(p)
         table=el('tbl');props=el('tblPr');props.append(el('tblW',{'w':15478,'type':'dxa'}))
         borders=el('tblBorders')
         for side in ['top','left','bottom','right','insideH','insideV']:
             borders.append(el(side,{'val':'single','sz':6,'color':'D9D9D9'}))
         props.append(borders);props.append(el('tblLayout',{'type':'fixed'}));margins=el('tblCellMar')
-        for side in ['top','left','bottom','right']:margins.append(el(side,{'w':65,'type':'dxa'}))
+        for side in ['top','left','bottom','right']:margins.append(el(side,{'w':30 if fit else 65,'type':'dxa'}))
         props.append(margins);table.append(props)
         columns=len(section['headers']);first=1100 if section['headers'][0]=='Пара' else 1550
         widths=[first]+[(15478-first)//(columns-1)]*(columns-1)
@@ -57,16 +77,16 @@ def word_document(report):
                 tc=el('tc');cp=el('tcPr');cp.append(el('tcW',{'w':width,'type':'dxa'}))
                 if row_index==0:cp.append(el('shd',{'fill':'DCE6F1'}))
                 cp.append(el('vAlign',{'val':'center'}))
-                tc.append(cp);tc.append(paragraph(text,bold=row_index==0));tr.append(tc)
+                tc.append(cp);tc.append(paragraph(text,'ScheduleCell' if fit else None,bold=row_index==0,compact=fit));tr.append(tc)
             table.append(tr)
-        body.append(table);body.append(paragraph(''))
+        body.append(table);body.append(paragraph('','ScheduleCell' if fit else None,compact=fit))
     section=el('sectPr');section.extend([el('footerReference',{'type':'default'}),el('pgSz',{'w':16838,'h':11906,'orient':'landscape'}),
         el('pgMar',{'top':600,'bottom':600,'left':680,'right':680,'header':300,'footer':300,'gutter':0})])
     section[0].set('{'+R+'}id','rIdFooter');body.append(section)
     styles=el('styles');defaults=el('docDefaults');rdefault=el('rPrDefault');rp=el('rPr')
     rp.extend([el('rFonts',{'ascii':'Arial','hAnsi':'Arial','cs':'Arial'}),el('color',{'val':'000000'}),el('sz',{'val':18}),el('lang',{'val':'ru-RU'})])
     rdefault.append(rp);defaults.append(rdefault);styles.append(defaults)
-    for name,size in [('Normal',18),('Title',32),('Subtitle',20),('Heading1',25)]:
+    for name,size in [('Normal',18),('Title',26 if fit else 32),('Subtitle',16 if fit else 20),('Heading1',18 if fit else 25),('ScheduleCell',size)]:
         style=el('style',{'type':'paragraph','styleId':name});style.append(el('name',{'val':name}));props=el('rPr')
         props.extend([el('color',{'val':'000000'}),el('sz',{'val':size})]);style.append(props);styles.append(style)
     footer=el('ftr');p=paragraph('');p.find('{'+W+'}pPr').append(el('jc',{'val':'center'}));field=el('fldSimple',{'instr':'PAGE'})
