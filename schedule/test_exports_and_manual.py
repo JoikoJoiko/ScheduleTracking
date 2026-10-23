@@ -174,10 +174,10 @@ class ManualAndRoomTests(TestCase):
 
     def test_number_rules_include_suffixes_gym_and_preserve_unknown_codes(self):
         from .room_locations import location_from_number
-        for number,expected in [('101',(1,None)),('204',(2,None)),('104о',(1,'Общежитие')),
-                ('103п1',(1,'Производственный')),('101п6',(1,'Производственный')),
-                ('210П',(2,'Производственный')),('С.зал2',(1,None)),('Спортивный зал',(1,None)),
-                ('спорт. зал',(1,None)),('01',(None,None)),('Акт.',(None,None)),('А.з.о',(None,'Общежитие')),('101б',(1,None))]:
+        for number,expected in [('101',(1,'1 корпус · Основной')),('204',(2,'1 корпус · Основной')),('104о',(1,'1 корпус · Общежитие')),
+                ('103п1',(1,'1 корпус · Производственный')),('101п6',(1,'1 корпус · Производственный')),
+                ('210П',(2,'1 корпус · Производственный')),('С.зал2',(1,'1 корпус · Основной')),('Спортивный зал',(1,'1 корпус · Основной')),
+                ('спорт. зал',(1,'1 корпус · Основной')),('01',(None,'1 корпус · Основной')),('Акт.',(None,None)),('А.з.о',(None,'1 корпус · Общежитие')),('101б',(1,None))]:
             with self.subTest(number=number):self.assertEqual(location_from_number(number),expected)
 
     def test_infer_location_is_explicit_root_only_and_preserves_manual_values(self):
@@ -186,7 +186,7 @@ class ManualAndRoomTests(TestCase):
         self.client.get('/admin/rooms/grouping/')
         room.refresh_from_db();self.assertIsNone(room.floor)
         self.assertEqual(self.client.post('/admin/rooms/grouping/',{'action':'infer'}).status_code,302)
-        room.refresh_from_db();self.assertEqual((room.floor,room.campus.name),(1,'Общежитие'))
+        room.refresh_from_db();self.assertEqual((room.floor,room.campus.name),(1,'1 корпус · Общежитие'))
         room.floor=0;room.save()
         self.client.post('/admin/rooms/grouping/',{'action':'infer'})
         room.refresh_from_db();self.assertEqual(room.floor,0)
@@ -199,4 +199,22 @@ class ManualAndRoomTests(TestCase):
         materialize([{'group':self.group.name,'subgroup':'','room':'103п4','teacher':self.teacher.name,
             'subject':self.subject.name,'slot':1,'week_type':'all','day_of_week':0}],metadata,self.period)
         room=Room.objects.get(number='103п4')
-        self.assertEqual((room.floor,room.campus.name),(1,'Производственный'))
+        self.assertEqual((room.floor,room.campus.name),(1,'1 корпус · Производственный'))
+
+    def test_complex_order_and_upgrade_keep_manual_room_assignments(self):
+        from importlib import import_module
+        from types import SimpleNamespace
+        from django.apps import apps
+        from django.db import connection
+        old=RoomCampus.objects.create(name='Производственный')
+        self.room2.campus=old;self.room2.save()
+        custom=RoomCampus.objects.create(name='2 корпус · Основной')
+        self.remote.campus=custom;self.remote.save()
+        import_module('schedule.migrations.0014_main_room_campus').group_first_complex(apps,SimpleNamespace(connection=connection))
+        self.room.refresh_from_db();self.room2.refresh_from_db();self.remote.refresh_from_db()
+        self.assertEqual(self.room.campus.name,'1 корпус · Основной')
+        self.assertEqual(self.room2.campus.name,'1 корпус · Производственный')
+        self.assertEqual(self.remote.campus_id,custom.pk)
+        RoomCampus.objects.create(name='1 корпус · Общежитие')
+        self.assertEqual([c['name'] for c in self.client.get('/api/meta').json()['room_campuses']],
+            ['1 корпус · Основной','1 корпус · Производственный','1 корпус · Общежитие','2 корпус · Основной'])

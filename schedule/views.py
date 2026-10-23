@@ -86,6 +86,7 @@ def matches(name, query):
 
 @api
 def meta(request):
+    from .room_locations import campus_sort_key
     version=ScheduleVersion.objects.filter(status='published').order_by('-published_at').first()
     change=Change.objects.filter(status='published').order_by('-published_at').first()
     stamps=[x.published_at for x in [version,change] if x]
@@ -98,7 +99,7 @@ def meta(request):
     return JsonResponse({'organization':organization,'version':settings.SITE_VERSION,'today':timezone.localdate().isoformat(),'now':timezone.localtime().isoformat(),
         'updated_at':max(stamps).isoformat() if stamps else None,
         'buildings':list(Building.objects.values('id','name')),
-        'room_campuses':list(RoomCampus.objects.values('id','name')),
+        'room_campuses':sorted(RoomCampus.objects.values('id','name'),key=lambda c:campus_sort_key(c['name'])),
         'room_floors':list(Room.objects.exclude(floor=None).order_by('floor').values_list('floor',flat=True).distinct()),
         'room_types':list(RoomType.objects.values('id','name')),
         'specialties':list(Specialty.objects.values('id','name','code')),
@@ -276,7 +277,8 @@ def room_availability(request):
         rows=[r for r in rows if r['status']==request.GET['status']]
     grouping=request.GET.get('group_by')
     if grouping in ['campus','floor','campus_floor']:
-        rows.sort(key=lambda r:((r['campus'] or '\uffff') if grouping!='floor' else '',
+        from .room_locations import campus_sort_key
+        rows.sort(key=lambda r:(campus_sort_key(r['campus']) if grouping!='floor' else (),
             r['floor'] if r['floor'] is not None else 999,r['number']))
     if request.GET.get('grid')=='1':
         grid={room.pk:[] for room in rooms}

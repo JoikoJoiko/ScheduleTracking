@@ -36,6 +36,11 @@ class RoomPlaceForm(forms.Form):
     campus=forms.ModelChoiceField(RoomCampus.objects.all(),required=False,label='Корпус')
     floor=forms.IntegerField(required=False,min_value=-10,max_value=100,label='Этаж')
 
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        from .room_locations import campus_sort_key
+        self.fields['campus'].choices=[('','---------')]+[(c.pk,c.name) for c in sorted(RoomCampus.objects.all(),key=lambda c:campus_sort_key(c.name))]
+
 
 class RoomCampusForm(forms.ModelForm):
     class Meta:
